@@ -95,7 +95,7 @@ func TestPodManifestCanBeWritten(t *testing.T) {
 
 func TestPodManifestCanWriteItsConfigStanzaSeparately(t *testing.T) {
 	config := testPod()
-	manifest, err := ManifestFromBytes(bytes.NewBufferString(config).Bytes())
+	manifest, err := ManifestFromBytes([]byte(config))
 	Assert(t).IsNil(err, "should not have erred when building manifest")
 
 	buff := bytes.Buffer{}
@@ -107,7 +107,7 @@ func TestPodManifestCanWriteItsConfigStanzaSeparately(t *testing.T) {
 
 func TestPodManifestCanReportItsSHA(t *testing.T) {
 	config := testPod()
-	manifest, err := ManifestFromBytes(bytes.NewBufferString(config).Bytes())
+	manifest, err := ManifestFromBytes([]byte(config))
 	Assert(t).IsNil(err, "should not have erred when building manifest")
 	val, err := manifest.SHA()
 	Assert(t).IsNil(err, "should not have erred when getting SHA")
@@ -123,13 +123,13 @@ func TestNilPodManifestHasEmptySHA(t *testing.T) {
 
 func TestRunAs(t *testing.T) {
 	config := testPod()
-	manifest, err := ManifestFromBytes(bytes.NewBufferString(config).Bytes())
+	manifest, err := ManifestFromBytes([]byte(config))
 	Assert(t).IsNil(err, "should not have erred when building manifest")
 
 	Assert(t).AreEqual(manifest.RunAsUser(), manifest.ID(), "RunAsUser() didn't match expectations")
 
 	config += `run_as: specialuser`
-	manifest, err = ManifestFromBytes(bytes.NewBufferString(config).Bytes())
+	manifest, err = ManifestFromBytes([]byte(config))
 	Assert(t).IsNil(err, "should not have erred when building manifest")
 	Assert(t).AreEqual(manifest.RunAsUser(), "specialuser", "RunAsUser() didn't match expectations")
 }
