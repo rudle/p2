@@ -72,10 +72,10 @@ func LossyCopy(dest io.Writer, src io.Reader, capacity int, logger logging.Logge
 // through a buffer to better handle mismatched latencies. Lines written to
 // lossyWriter will be copied in a best effort way with respect to latency and
 // buffered through a go channel.
-func Tee(r io.Reader, faithfulWriter io.Writer, lossyWriter io.Writer, logger logging.Logger) {
-	tr := io.TeeReader(r, bufio.NewWriterSize(faithfulWriter, 1<<10))
+func Tee(r io.Reader, durableWriter io.Writer, lossyWriter io.Writer, logger logging.Logger) {
+	tr := io.TeeReader(r, bufio.NewWriterSize(durableWriter, 1<<20))
 
-	LossyCopy(lossyWriter, tr, 1<<20, logger)
+	LossyCopy(lossyWriter, tr, 1<<24, logger)
 }
 
 // This is an error wrapper type that may be used to denote an error is retriable
