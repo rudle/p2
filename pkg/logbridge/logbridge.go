@@ -45,7 +45,9 @@ func LossyCopy(dest io.Writer, src io.Reader, capacity int, logger logging.Logge
 			numDropped++
 			// We rate limit these messages to avoid swamping our writer with noise.
 			if numDropped%10 == 0 {
-				if err := writeDroppedMessageWarning(dest); err != nil {
+				if _, err := writeWithRetry(dest,
+					[]byte("logbridge is dropping messages. This may result in a lack of visibility. Complete app logs are available on disk."),
+					logger); err != nil {
 					logger.WithError(err).Errorln("Failed to notify backend log system about dropped messages.")
 				}
 			}
@@ -61,7 +63,7 @@ func LossyCopy(dest io.Writer, src io.Reader, capacity int, logger logging.Logge
 			case droppedMessages <- line:
 			default:
 			}
-			logger.WithError(err).WithField("dropped line", line).WithField("retried", retriableError(err)).WithField("bytes written", n).Errorln("Encountered a non-recoverable error. Proceeding.")
+			logger.WithError(err).WithField("dropped line", line).WithField("retried", isRetriable(err)).WithField("bytes written", n).Errorln("Encountered a non-recoverable error. Proceeding.")
 		}
 	}
 }
@@ -87,7 +89,7 @@ func (r RetriableError) Error() string {
 	return r.err.Error()
 }
 
-func retriableError(err error) bool {
+func isRetriable(err error) bool {
 	_, ok := err.(*RetriableError)
 	return ok
 }
@@ -103,7 +105,7 @@ func writeWithRetry(w io.Writer, line []byte, logger logging.Logger) (int, error
 
 	for attempt := 1; attempt <= totalAttempts; attempt++ {
 		n, err = w.Write(line)
-		if err == nil || !retriableError(err) {
+		if err == nil || !isRetriable(err) {
 			return n, err
 		}
 		logger.WithError(err).Errorf("Retriable error, retry %d of %d", attempt, totalAttempts)
@@ -111,16 +113,4 @@ func writeWithRetry(w io.Writer, line []byte, logger logging.Logger) (int, error
 	}
 
 	return n, err
-}
-
-func writeDroppedMessageWarning(w io.Writer) error {
-	retries := 3
-	var err error
-	for attempt := 0; attempt < retries; attempt++ {
-		if _, err = w.Write([]byte("logbridge is dropping messages, which may result in a lack of visibility. More information can be found in logbridge's logs")); err == nil {
-			return nil
-		}
-	}
-
-	return err
 }
