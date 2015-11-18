@@ -12,7 +12,7 @@ import (
 // It returns the number of dropped messages as a result of insufficient
 // capacity
 // The caller is responsible for closing & flushing the reader and writer.
-func Copy(dest io.Writer, src io.Reader, capacity int, logger logging.Logger) {
+func LossyCopy(dest io.Writer, src io.Reader, capacity int, logger logging.Logger) {
 	lines := make(chan []byte, capacity)
 	droppedMessages := make(chan []byte, capacity)
 	go func(dest io.Writer, src io.Reader, lines chan []byte) {
@@ -64,6 +64,16 @@ func Copy(dest io.Writer, src io.Reader, capacity int, logger logging.Logger) {
 			logger.WithError(err).WithField("dropped line", line).WithField("retried", retriableError(err)).WithField("bytes written", n).Errorln("Encountered a non-recoverable error. Proceeding.")
 		}
 	}
+}
+
+// Tee will copy to faithfulWriter without dropping messages, it will copy
+// through a buffer to better handle mismatched latencies. Lines written to
+// lossyWriter will be copied in a best effort way with respect to latency and
+// buffered through a go channel.
+func Tee(r io.Reader, faithfulWriter io.Writer, lossyWriter io.Writer, logger logging.Logger) {
+	tr := io.TeeReader(r, bufio.NewWriterSize(faithfulWriter, 1<<10))
+
+	LossyCopy(lossyWriter, tr, 1<<20, logger)
 }
 
 // This is an error wrapper type that may be used to denote an error is retriable

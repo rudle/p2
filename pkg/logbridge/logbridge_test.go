@@ -45,7 +45,7 @@ func TestLogBridge(t *testing.T) {
 		reader := bytes.NewReader(input)
 		writer := &TrackingWriter{}
 
-		Copy(writer, reader, testCase.bridgeCapacity, logging.DefaultLogger)
+		LossyCopy(writer, reader, testCase.bridgeCapacity, logging.DefaultLogger)
 		if writer.numWrites < testCase.expected {
 			t.Errorf("Writer did not receive enough writes, got %d expected: %d", writer.numWrites, testCase.inputSize)
 		}
@@ -81,7 +81,7 @@ func TestLogBridgeLogDrop(t *testing.T) {
 	reader := bytes.NewReader(input)
 	writer := &LatentWriter{}
 
-	Copy(writer, reader, bridgeCapacity, logging.DefaultLogger)
+	LossyCopy(writer, reader, bridgeCapacity, logging.DefaultLogger)
 
 	if writer.writes < bridgeCapacity {
 		t.Errorf("Expected at least %d messages to succeed under writer latency, got %d.", bridgeCapacity, writer.writes)
@@ -146,14 +146,14 @@ func TestErrorCases(t *testing.T) {
 	}
 
 	reader := bytes.NewReader(input)
-	Copy(errorWriter, reader, bridgeCapacity, logging.DefaultLogger)
+	LossyCopy(errorWriter, reader, bridgeCapacity, logging.DefaultLogger)
 
 	if len(errorWriter.bytes) >= len(input) {
 		t.Errorf("Expected non-retriable error to cause line to be skipped.")
 	}
 
 	reader = bytes.NewReader(input)
-	Copy(retriableErrorWriter, reader, bridgeCapacity, logging.DefaultLogger)
+	LossyCopy(retriableErrorWriter, reader, bridgeCapacity, logging.DefaultLogger)
 
 	if len(retriableErrorWriter.bytes) != bridgeCapacity {
 		t.Errorf("Expected bridge to successfully retry writes that result in error. Expected %d Got %d", bridgeCapacity, len(retriableErrorWriter.bytes))

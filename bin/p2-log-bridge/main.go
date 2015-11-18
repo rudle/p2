@@ -8,5 +8,5 @@ import (
 )
 
 func main() {
-	logbridge.Copy(os.Stdout, os.Stdin, 1024, logging.DefaultLogger)
+	logbridge.LossyCopy(os.Stdout, os.Stdin, 1024, logging.DefaultLogger)
 }
