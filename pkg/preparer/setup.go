@@ -36,14 +36,15 @@ type LogDestination struct {
 }
 
 type Preparer struct {
-	node         string
-	store        Store
-	hooks        Hooks
-	hookListener HookListener
-	Logger       logging.Logger
-	podRoot      string
-	caFile       string
-	authPolicy   auth.Policy
+	node             string
+	store            Store
+	hooks            Hooks
+	hookListener     HookListener
+	Logger           logging.Logger
+	podRoot          string
+	caFile           string
+	authPolicy       auth.Policy
+	logExecTestGroup []string
 }
 
 type PreparerConfig struct {
@@ -62,6 +63,7 @@ type PreparerConfig struct {
 	Auth                 map[string]interface{} `yaml:"auth,omitempty"`
 	ExtraLogDestinations []LogDestination       `yaml:"extra_log_destinations,omitempty"`
 	LogLevel             string                 `yaml:"log_level,omitempty"`
+	LogExecTestGroup     []string               `yaml:"log_exec_test_group",omitempty`
 
 	// Params defines a collection of miscellaneous runtime parameters defined throughout the
 	// source files.
@@ -325,13 +327,14 @@ func New(preparerConfig *PreparerConfig, logger logging.Logger) (*Preparer, erro
 	}
 
 	return &Preparer{
-		node:         preparerConfig.NodeName,
-		store:        store,
-		hooks:        hooks.Hooks(preparerConfig.HooksDirectory, &logger),
-		hookListener: listener,
-		Logger:       logger,
-		podRoot:      preparerConfig.PodRoot,
-		authPolicy:   authPolicy,
-		caFile:       consulCAFile,
+		node:             preparerConfig.NodeName,
+		store:            store,
+		hooks:            hooks.Hooks(preparerConfig.HooksDirectory, &logger),
+		hookListener:     listener,
+		Logger:           logger,
+		podRoot:          preparerConfig.PodRoot,
+		authPolicy:       authPolicy,
+		caFile:           consulCAFile,
+		logExecTestGroup: preparerConfig.LogExecTestGroup,
 	}, nil
 }

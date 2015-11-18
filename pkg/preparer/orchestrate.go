@@ -15,6 +15,8 @@ import (
 // Used because the preparer special-cases itself in a few places.
 const POD_ID = "p2-preparer"
 
+var logBridgeExec = []string{"/usr/local/bin/p2-log-bridge", "start"}
+
 type Pod interface {
 	hooks.Pod
 	Launch(pods.Manifest) (bool, error)
@@ -166,6 +168,12 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 				// TODO better solution: force the preparer to have a 0s default timeout, prevent KILLs
 				if pod.Id == POD_ID {
 					pod.DefaultTimeout = time.Duration(0)
+				}
+
+				for _, testPodId := range p.logExecTestGroup {
+					if pod.Id == testPodId {
+						pod.LogExec = logBridgeExec
+					}
 				}
 
 				ok := p.resolvePair(nextLaunch, pod, manifestLogger)
