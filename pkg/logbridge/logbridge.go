@@ -74,8 +74,9 @@ func LossyCopy(dest io.Writer, src io.Reader, capacity int, logger logging.Logge
 // buffered through a go channel.
 func Tee(r io.Reader, durableWriter io.Writer, lossyWriter io.Writer, logger logging.Logger) {
 	tr := io.TeeReader(r, bufio.NewWriterSize(durableWriter, 1<<20))
+	//tr := io.TeeReader(r, durableWriter)
 
-	LossyCopy(lossyWriter, tr, 1<<24, logger)
+	LossyCopy(lossyWriter, tr, 1<<20, logger)
 }
 
 // This is an error wrapper type that may be used to denote an error is retriable
@@ -102,6 +103,7 @@ func writeWithRetry(w io.Writer, line []byte, logger logging.Logger) (int, error
 	var err error
 	var n int
 	totalAttempts := 5
+	line = append(line, byte(10)) // TODO is this appropriate?
 
 	for attempt := 1; attempt <= totalAttempts; attempt++ {
 		n, err = w.Write(line)
