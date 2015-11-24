@@ -170,11 +170,11 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 					pod.DefaultTimeout = time.Duration(0)
 				}
 
-				for _, testPodId := range p.logExecTestGroup {
-					if pod.Id == testPodId || pod.Id == "slug" {
-						pod.LogExec = logBridgeExec
-					}
-				}
+				// for _, testPodId := range p.logExecTestGroup {
+				// 	if pod.Id == testPodId || pod.Id == "slug" {
+				pod.LogExec = logBridgeExec
+				// }
+				// }
 
 				ok := p.resolvePair(nextLaunch, pod, manifestLogger)
 				if ok {

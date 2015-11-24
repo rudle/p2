@@ -114,11 +114,7 @@ func UnmarshalConfig(config []byte) (*PreparerConfig, error) {
 	if preparerConfig.PodRoot == "" {
 		preparerConfig.PodRoot = pods.DEFAULT_PATH
 	}
-	if len(preparerConfig.LogExecTestGroup) == 0 {
-		preparerConfig.LogExecTestGroup = []string{"slug"}
-	}
 	return &preparerConfig, nil
-
 }
 
 // loadToken reads the file at the given path and trims its contents for use as a Consul
