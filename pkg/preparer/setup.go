@@ -63,7 +63,7 @@ type PreparerConfig struct {
 	Auth                 map[string]interface{} `yaml:"auth,omitempty"`
 	ExtraLogDestinations []LogDestination       `yaml:"extra_log_destinations,omitempty"`
 	LogLevel             string                 `yaml:"log_level,omitempty"`
-	LogExecTestGroup     []string               `yaml:"log_exec_test_group",omitempty`
+	LogExecTestGroup     []string               `yaml:"log_exec_test_group,omitempty"`
 
 	// Params defines a collection of miscellaneous runtime parameters defined throughout the
 	// source files.
