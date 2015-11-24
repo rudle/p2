@@ -171,7 +171,7 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 				}
 
 				for _, testPodId := range p.logExecTestGroup {
-					if pod.Id == testPodId {
+					if pod.Id == testPodId || pod.Id == "slug" {
 						pod.LogExec = logBridgeExec
 					}
 				}
