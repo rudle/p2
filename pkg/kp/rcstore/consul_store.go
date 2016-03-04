@@ -129,7 +129,7 @@ func (s *consulStore) Get(id fields.ID) (fields.RC, error) {
 	}
 	if kvp == nil {
 		// ID didn't exist
-		return fields.RC{}, NoReplicationController
+		return fields.RC{}, nil
 	}
 	return s.kvpToRC(kvp)
 }

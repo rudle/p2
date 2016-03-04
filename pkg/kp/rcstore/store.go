@@ -1,7 +1,6 @@
 package rcstore
 
 import (
-	"errors"
 	"path"
 
 	"github.com/square/p2/Godeps/_workspace/src/k8s.io/kubernetes/pkg/labels"
@@ -13,8 +12,6 @@ import (
 )
 
 const rcTree string = "replication_controllers"
-
-var NoReplicationController error = errors.New("No replication controller found")
 
 // Store represents an interface for persisting replication controllers to Consul,
 // as well as restoring replication controllers from Consul.
@@ -84,8 +81,4 @@ func RCUpdateLockPath(rcId fields.ID) (string, error) {
 	}
 
 	return path.Join(kp.LOCK_TREE, rcPath, "update"), nil
-}
-
-func IsNotExist(err error) bool {
-	return err == NoReplicationController
 }
