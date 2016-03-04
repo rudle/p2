@@ -19,7 +19,7 @@ import (
 )
 
 type Factory interface {
-	New(roll_fields.Update, logging.Logger, kp.Session) Update
+	New(roll_fields.Update, logging.Logger, kp.Lock) Update
 }
 
 type UpdateFactory struct {
@@ -30,8 +30,8 @@ type UpdateFactory struct {
 	Scheduler     rc.Scheduler
 }
 
-func (f UpdateFactory) New(u roll_fields.Update, l logging.Logger, session kp.Session) Update {
-	return NewUpdate(u, f.KPStore, f.RCStore, f.HealthChecker, f.Labeler, f.Scheduler, l, session)
+func (f UpdateFactory) New(u roll_fields.Update, l logging.Logger, lock kp.Lock) Update {
+	return NewUpdate(u, f.KPStore, f.RCStore, f.HealthChecker, f.Labeler, f.Scheduler, l, lock)
 }
 
 type RCGetter interface {
@@ -50,15 +50,14 @@ type Farm struct {
 	sessions <-chan string
 
 	children map[fields.ID]childRU
-	session  kp.Session
+	lock     kp.Lock
 
 	logger logging.Logger
 }
 
 type childRU struct {
-	ru       Update
-	unlocker kp.Unlocker
-	quit     chan<- struct{}
+	ru   Update
+	quit chan<- struct{}
 }
 
 func NewFarm(
@@ -90,7 +89,7 @@ func NewFarm(
 func (rlf *Farm) Start(quit <-chan struct{}) {
 	consulutil.WithSession(quit, rlf.sessions, func(sessionQuit <-chan struct{}, session string) {
 		rlf.logger.WithField("session", session).Infoln("Acquired new session")
-		rlf.session = rlf.kps.NewUnmanagedSession(session, "")
+		rlf.lock = rlf.kps.NewUnmanagedLock(session, "")
 		rlf.mainLoop(sessionQuit)
 	})
 }
@@ -105,7 +104,7 @@ START_LOOP:
 		select {
 		case <-quit:
 			rlf.logger.NoFields().Infoln("Session expired, releasing updates")
-			rlf.session = nil
+			rlf.lock = nil
 			rlf.releaseChildren()
 			return
 		case err := <-rlErr:
@@ -144,7 +143,7 @@ START_LOOP:
 					rlLogger.WithError(err).Errorln("Unable to compute roll lock path")
 				}
 
-				unlocker, err := rlf.session.Lock(lockPath)
+				err = rlf.lock.Lock(lockPath)
 				if _, ok := err.(kp.AlreadyLockedError); ok {
 					// someone else must have gotten it first - log and move to
 					// the next one
@@ -161,13 +160,9 @@ START_LOOP:
 				// at this point the ru is ours, time to spin it up
 				rlLogger.NoFields().Infoln("Acquired lock on new update, spawning")
 
-				newChild := rlf.factory.New(rlField, rlLogger, rlf.session)
+				newChild := rlf.factory.New(rlField, rlLogger, rlf.lock)
 				childQuit := make(chan struct{})
-				rlf.children[rlField.NewRC] = childRU{
-					ru:       newChild,
-					quit:     childQuit,
-					unlocker: unlocker,
-				}
+				rlf.children[rlField.NewRC] = childRU{ru: newChild, quit: childQuit}
 				foundChildren[rlField.NewRC] = struct{}{}
 
 				go func(id fields.ID) {
@@ -199,16 +194,20 @@ START_LOOP:
 func (rlf *Farm) releaseChild(id fields.ID) {
 	rlf.logger.WithField("ru", id).Infoln("Releasing update")
 	close(rlf.children[id].quit)
+	delete(rlf.children, id)
 
 	// if our lock is active, attempt to gracefully release it
-	if rlf.session != nil {
-		unlocker := rlf.children[id].unlocker
-		err := unlocker.Unlock()
+	if rlf.lock != nil {
+		lockPath, err := rollstore.RollLockPath(id)
+		if err != nil {
+			rlf.logger.WithError(err).Errorln("Unable to compute roll lock path")
+		}
+
+		err = rlf.lock.Unlock(lockPath)
 		if err != nil {
 			rlf.logger.WithField("ru", id).Warnln("Could not release update lock")
 		}
 	}
-	delete(rlf.children, id)
 }
 
 // close all children

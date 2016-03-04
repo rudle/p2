@@ -27,15 +27,14 @@ type Farm struct {
 	sessions <-chan string
 
 	children map[fields.ID]childRC
-	session  kp.Session
+	lock     kp.Lock
 
 	logger logging.Logger
 }
 
 type childRC struct {
-	rc       ReplicationController
-	unlocker kp.Unlocker
-	quit     chan<- struct{}
+	rc   ReplicationController
+	quit chan<- struct{}
 }
 
 func NewFarm(
@@ -66,9 +65,9 @@ func NewFarm(
 // Start is not safe for concurrent execution. Do not execute multiple
 // concurrent instances of Start.
 func (rcf *Farm) Start(quit <-chan struct{}) {
-	consulutil.WithSession(quit, rcf.sessions, func(sessionQuit <-chan struct{}, sessionID string) {
-		rcf.logger.WithField("session", sessionID).Infoln("Acquired new session")
-		rcf.session = rcf.kpStore.NewUnmanagedSession(sessionID, "")
+	consulutil.WithSession(quit, rcf.sessions, func(sessionQuit <-chan struct{}, session string) {
+		rcf.logger.WithField("session", session).Infoln("Acquired new session")
+		rcf.lock = rcf.kpStore.NewUnmanagedLock(session, "")
 		rcf.mainLoop(sessionQuit)
 	})
 }
@@ -83,7 +82,7 @@ START_LOOP:
 		select {
 		case <-quit:
 			rcf.logger.NoFields().Infoln("Session expired, releasing replication controllers")
-			rcf.session = nil
+			rcf.lock = nil
 			rcf.releaseChildren()
 			return
 		case err := <-rcErr:
@@ -111,7 +110,7 @@ START_LOOP:
 					continue
 				}
 
-				rcUnlocker, err := rcf.session.Lock(lockPath)
+				err = rcf.lock.Lock(lockPath)
 				if _, ok := err.(kp.AlreadyLockedError); ok {
 					// someone else must have gotten it first - log and move to
 					// the next one
@@ -137,11 +136,7 @@ START_LOOP:
 					rcLogger,
 				)
 				childQuit := make(chan struct{})
-				rcf.children[rcField.ID] = childRC{
-					rc:       newChild,
-					quit:     childQuit,
-					unlocker: rcUnlocker,
-				}
+				rcf.children[rcField.ID] = childRC{rc: newChild, quit: childQuit}
 				foundChildren[rcField.ID] = struct{}{}
 
 				go func() {
@@ -170,16 +165,21 @@ START_LOOP:
 func (rcf *Farm) releaseChild(id fields.ID) {
 	rcf.logger.WithField("rc", id).Infoln("Releasing replication controller")
 	close(rcf.children[id].quit)
+	delete(rcf.children, id)
 
 	// if our lock is active, attempt to gracefully release it on this rc
-	if rcf.session != nil {
-		unlocker := rcf.children[id].unlocker
-		err := unlocker.Unlock()
+	if rcf.lock != nil {
+		lockPath, err := rcstore.RCLockPath(id)
+		if err != nil {
+			rcf.logger.WithField("rc", id).WithError(err).Errorln("Could not compute rc lock path for releasing")
+			return
+		}
+
+		err = rcf.lock.Unlock(lockPath)
 		if err != nil {
 			rcf.logger.WithField("rc", id).Warnln("Could not release replication controller lock")
 		}
 	}
-	delete(rcf.children, id)
 }
 
 // close all children

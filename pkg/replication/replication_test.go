@@ -261,9 +261,9 @@ func TestStopsIfLockDestroyed(t *testing.T) {
 	}
 
 	triggerRenewalCh := make(chan time.Time)
-	session, renewalErrCh, err := store.NewSession(testLockMessage, triggerRenewalCh)
+	lock, renewalErrCh, err := store.NewLock(testLockMessage, triggerRenewalCh)
 	if err != nil {
-		t.Fatalf("Unable to create initial replication session: %s", err)
+		t.Fatalf("Unable to create initial replication lock: %s", err)
 	}
 
 	for _, host := range testNodes {
@@ -272,12 +272,12 @@ func TestStopsIfLockDestroyed(t *testing.T) {
 			t.Fatalf("Unable to compute lock path for pod: %s", err)
 		}
 
-		_, err = replication.lock(session, lockPath, false)
+		err = replication.lock(lock, lockPath, false)
 		if err != nil {
 			t.Fatalf("Unable to perform initial replication lock: %s", err)
 		}
 	}
-	go replication.handleRenewalErrors(session, renewalErrCh)
+	go replication.handleRenewalErrors(lock, renewalErrCh)
 
 	doneCh := make(chan struct{})
 

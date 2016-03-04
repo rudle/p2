@@ -74,7 +74,7 @@ type replication struct {
 // if overrideLock is true, will destroy any session holding any of the keys we
 // wish to lock
 func (r replication) lockHosts(overrideLock bool, lockMessage string) error {
-	session, renewalErrCh, err := r.store.NewSession(lockMessage, nil)
+	lock, renewalErrCh, err := r.store.NewLock(lockMessage, nil)
 	if err != nil {
 		return err
 	}
@@ -82,54 +82,53 @@ func (r replication) lockHosts(overrideLock bool, lockMessage string) error {
 	for _, host := range r.nodes {
 		lockPath, err := kp.PodLockPath(kp.INTENT_TREE, host, r.manifest.ID())
 		if err != nil {
-			session.Destroy()
+			lock.Destroy()
 			return err
 		}
 
-		// We don't keep a reference to the kp.Unlocker, because we just destroy
-		// the session at the end of the replication anyway
-		_, err = r.lock(session, lockPath, overrideLock)
+		err = r.lock(lock, lockPath, overrideLock)
+
 		if err != nil {
-			session.Destroy()
+			lock.Destroy()
 			return err
 		}
 	}
-	go r.handleRenewalErrors(session, renewalErrCh)
+	go r.handleRenewalErrors(lock, renewalErrCh)
 
 	return nil
 }
 
 // Attempts to claim a lock. If the overrideLock is set, any existing lock holder
 // will be destroyed and one more attempt will be made to acquire the lock
-func (r replication) lock(session kp.Session, lockPath string, overrideLock bool) (kp.Unlocker, error) {
-	unlocker, err := session.Lock(lockPath)
+func (r replication) lock(lock kp.Lock, lockPath string, overrideLock bool) error {
+	err := lock.Lock(lockPath)
 
 	if _, ok := err.(kp.AlreadyLockedError); ok {
 		holder, id, err := r.store.LockHolder(lockPath)
 		if err != nil {
-			return nil, util.Errorf("Lock already held for %q, could not determine holder due to error: %s", lockPath, err)
+			return util.Errorf("Lock already held for %q, could not determine holder due to error: %s", lockPath, err)
 		} else if holder == "" {
 			// we failed to acquire this lock, but there is no outstanding
 			// holder
 			// this indicates that the previous holder had a LockDelay,
 			// which prevents other parties from acquiring the lock for a
 			// limited time
-			return nil, util.Errorf("Lock for %q is blocked due to delay by previous holder", lockPath)
+			return util.Errorf("Lock for %q is blocked due to delay by previous holder", lockPath)
 		} else if overrideLock {
 			err = r.store.DestroyLockHolder(id)
 			if err != nil {
-				return nil, util.Errorf("Unable to destroy the current lock holder (%s) for %q: %s", holder, lockPath, err)
+				return util.Errorf("Unable to destroy the current lock holder (%s) for %q: %s", holder, lockPath, err)
 			}
 
 			// try acquiring the lock again, but this time don't destroy holders so we don't try forever
-			return r.lock(session, lockPath, false)
+			return r.lock(lock, lockPath, false)
 
 		} else {
-			return nil, util.Errorf("Lock for %q already held by lock %q", lockPath, holder)
+			return util.Errorf("Lock for %q already held by lock %q", lockPath, holder)
 		}
 	}
 
-	return unlocker, err
+	return err
 }
 
 // checkForManaged() checks whether there are any existing pods that this replication
@@ -233,11 +232,11 @@ func (r replication) Cancel() {
 // Listen for errors in lock renewal. If the lock can't be renewed, we need to
 // 1) stop replication and 2) communicate the error up a level
 // If replication finishes, destroy the lock
-func (r replication) handleRenewalErrors(session kp.Session, renewalErrCh chan error) {
+func (r replication) handleRenewalErrors(lock kp.Lock, renewalErrCh chan error) {
 	defer func() {
 		close(r.quitCh)
 		close(r.errCh)
-		session.Destroy()
+		lock.Destroy()
 	}()
 
 	select {
