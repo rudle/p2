@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/square/p2/pkg/health"
@@ -24,18 +23,19 @@ func (hc *FakeHealthChecker) Service(serviceID string) (map[string]health.Result
 	panic("not implemented")
 }
 
-func (hc *FakeHealthChecker) WatchHealth(resultCh chan []*health.Result, errCh chan<- error, quitCh <-chan struct{}) {
-	select {
-	case result := <-hc.healthResults:
-		fmt.Printf("res %v", result)
-		resultCh <- result
-	case <-quitCh:
-		return
+func (hc *FakeHealthChecker) WatchHealth(resultCh chan []*health.Result, _ chan<- error, quitCh <-chan struct{}) {
+	for {
+		select {
+		case result := <-hc.healthResults:
+			resultCh <- result
+		case <-quitCh:
+			return
+		}
 	}
 }
 
 func NewFakeHealthStore() (healthChecker HealthStore, healthValues chan []*health.Result) {
-	healthResults := make(chan []*health.Result, 1) // real clients should use a buffered chan. This is unbuffered to simplify concurrency in this test
+	healthResults := make(chan []*health.Result)
 	hc := &FakeHealthChecker{
 		healthResults: healthResults,
 	}
@@ -48,7 +48,10 @@ func TestStartWatchBasic(t *testing.T) {
 	hs, healthResults := NewFakeHealthStore()
 	quitCh := make(chan struct{})
 
+	watchScheduled := make(chan bool)
+
 	go func() {
+		watchScheduled <- true
 		hs.StartWatch(quitCh)
 	}()
 
@@ -61,11 +64,7 @@ func TestStartWatchBasic(t *testing.T) {
 		t.Errorf("expected cache to start empty, found %v", result)
 	}
 
-	healthResults <- []*health.Result{
-		&health.Result{ID: podID1, Node: node},
-		&health.Result{ID: podID2, Node: node},
-	}
-
+	<-watchScheduled
 	healthResults <- []*health.Result{
 		&health.Result{ID: podID1, Node: node},
 		&health.Result{ID: podID2, Node: node},
