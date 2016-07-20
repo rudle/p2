@@ -214,6 +214,31 @@ func (s *consulStore) MutateDS(
 	return ds, nil
 }
 
+func (s *consulStore) Disable(id fields.ID) (fields.DaemonSet, error) {
+	s.logger.Infof("Attempting to disable '%s' in store now", id)
+
+	mutator := func(dsToUpdate fields.DaemonSet) (fields.DaemonSet, error) {
+		dsToUpdate.Disabled = true
+		return dsToUpdate, nil
+	}
+	newDS, err := s.MutateDS(id, mutator)
+
+	// Delete the daemon set because there was an error during mutation
+	if err != nil {
+		s.logger.Errorf("Error occured when trying to disable daemon set in store: %v, attempting to delete now", err)
+		err = s.Delete(id)
+		// If you tried to delete it and there was an error, this is fatal
+		if err != nil {
+			return fields.DaemonSet{}, err
+		}
+		s.logger.Infof("Deletion was successful for the daemon set: '%s' in store", id)
+		return fields.DaemonSet{}, nil
+	}
+
+	s.logger.Infof("Daemon set '%s' was successfully disabled in store", id)
+	return newDS, nil
+}
+
 // Watch watches dsTree for changes and returns a blocking channel
 // where the client can read a WatchedDaemonSets object which contain
 // changed daemon sets
