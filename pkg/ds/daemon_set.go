@@ -1,8 +1,17 @@
 package ds
 
 import (
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"os/user"
+	"sync"
 	"time"
 
+	"github.com/square/p2/pkg/health"
+	"github.com/square/p2/pkg/health/checker"
+	"github.com/square/p2/pkg/replication"
 	"github.com/square/p2/pkg/util"
 
 	klabels "k8s.io/kubernetes/pkg/labels"
@@ -12,7 +21,6 @@ import (
 	"github.com/square/p2/pkg/kp/dsstore"
 	"github.com/square/p2/pkg/labels"
 	"github.com/square/p2/pkg/logging"
-	"github.com/square/p2/pkg/manifest"
 	"github.com/square/p2/pkg/scheduler"
 	"github.com/square/p2/pkg/types"
 )
@@ -52,49 +60,49 @@ type DaemonSet interface {
 
 	// CurrentPods() returns all nodes that are scheduled by this daemon set
 	CurrentPods() (types.PodLocations, error)
-}
 
-// These methods are the same as the methods of the same name in kp.Store.
-// This interface makes writing unit tests easier as daemon sets do not
-// use any functions not listed here
-type kpStore interface {
-	SetPod(
-		podPrefix kp.PodPrefix,
-		nodeName types.NodeName,
-		manifest manifest.Manifest,
-	) (time.Duration, error)
-
-	DeletePod(podPrefix kp.PodPrefix,
-		nodeName types.NodeName,
-		manifestID types.PodID,
-	) (time.Duration, error)
+	SetHealthChecker(toSet *checker.ConsulHealthChecker)
+	PublishToReplication() error
 }
 
 type daemonSet struct {
 	fields.DaemonSet
 
-	logger     logging.Logger
-	kpStore    kpStore
-	scheduler  scheduler.Scheduler
-	dsStore    dsstore.Store
-	applicator labels.Applicator
+	contention    dsContention
+	logger        logging.Logger
+	kpStore       kp.Store
+	scheduler     scheduler.Scheduler
+	dsStore       dsstore.Store
+	applicator    labels.Applicator
+	healthChecker *checker.ConsulHealthChecker
+
+	currentReplication replication.Replication
+	replicationLock    sync.Mutex
+	replicationOngoing bool
+}
+
+type dsContention struct {
+	contendedWith fields.ID
+	isContended   bool
 }
 
 func New(
 	fields fields.DaemonSet,
 	dsStore dsstore.Store,
-	kpStore kpStore,
+	kpStore kp.Store,
 	applicator labels.Applicator,
 	logger logging.Logger,
 ) DaemonSet {
 	return &daemonSet{
 		DaemonSet: fields,
 
-		dsStore:    dsStore,
-		kpStore:    kpStore,
-		logger:     logger,
-		applicator: applicator,
-		scheduler:  scheduler.NewApplicatorScheduler(applicator),
+		dsStore:            dsStore,
+		kpStore:            kpStore,
+		logger:             logger,
+		applicator:         applicator,
+		scheduler:          scheduler.NewApplicatorScheduler(applicator),
+		healthChecker:      nil,
+		replicationOngoing: false,
 	}
 }
 
@@ -112,6 +120,10 @@ func (ds *daemonSet) PodID() types.PodID {
 
 func (ds *daemonSet) GetNodeSelector() klabels.Selector {
 	return ds.DaemonSet.NodeSelector
+}
+
+func (ds *daemonSet) SetHealthChecker(toSet *checker.ConsulHealthChecker) {
+	ds.healthChecker = toSet
 }
 
 func (ds *daemonSet) WatchDesires(
@@ -283,6 +295,14 @@ func (ds *daemonSet) addPods() error {
 			return util.Errorf("Error scheduling node: %v", err)
 		}
 	}
+
+	if len(toScheduleSorted) > 0 {
+		err = ds.PublishToReplication()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -311,6 +331,18 @@ func (ds *daemonSet) removePods() error {
 			return util.Errorf("Error unscheduling node: %v", err)
 		}
 	}
+
+	if len(toUnscheduleSorted) > 0 {
+		ds.CancelReplication()
+	}
+
+	if len(podLocations)-len(toUnscheduleSorted) > 0 {
+		err = ds.PublishToReplication()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -343,6 +375,13 @@ func (ds *daemonSet) clearPods() error {
 			return util.Errorf("Error scheduling node: %v", err)
 		}
 	}
+
+	if len(toUnscheduleSorted) > 0 {
+		err = ds.PublishToReplication()
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -366,6 +405,7 @@ func (ds *daemonSet) schedule(node types.NodeName) error {
 	if err != nil {
 		return util.Errorf("Error adding pod to intent tree: %v", err)
 	}
+
 	return nil
 }
 
@@ -388,6 +428,111 @@ func (ds *daemonSet) unschedule(node types.NodeName) error {
 	}
 
 	return nil
+}
+
+func (ds *daemonSet) PublishToReplication() error {
+	// TODO: We need to specifically turn this on to work
+	if ds.healthChecker == nil {
+		ds.logger.Info("Healthchecker is nil")
+		return nil
+	}
+
+	podLocations, err := ds.CurrentPods()
+	if err != nil {
+		return util.Errorf("Error retrieving pod locations from daemon set: %v", err)
+	}
+	nodes := podLocations.Nodes()
+
+	ds.logger.Infof("Preparing to publish the following nodes: %v", nodes)
+
+	thisHost, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("Could not retrieve hostname: %s", err)
+	}
+	thisUser, err := user.Current()
+	if err != nil {
+		log.Fatalf("Could not retrieve user: %s", err)
+	}
+	lockMessage := fmt.Sprintf("%q from %q at %q", thisUser.Username, thisHost, time.Now())
+	repl, err := replication.NewReplicator(
+		ds.DaemonSet.Manifest,
+		ds.logger,
+		nodes,
+		len(nodes)-ds.DaemonSet.MinHealth,
+		ds.kpStore,
+		ds.applicator,
+		*ds.healthChecker,
+		health.HealthState("warning"),
+		lockMessage,
+	)
+	if err != nil {
+		for _, node := range nodes {
+			ds.unschedule(node)
+		}
+		log.Fatalf("Could not initialize replicator, pods have been unscheduled: %s", err)
+	}
+
+	ds.logger.Info("New replicator was made")
+
+	replication, errCh, err := repl.InitializeReplication(
+		false,
+		false,
+		replication.DefaultConcurrentReality,
+	)
+	if err != nil {
+		for _, node := range nodes {
+			ds.unschedule(node)
+		}
+		log.Fatalf("Unable to initialize replication, pods have been unscheduled: %s", err)
+	}
+
+	ds.logger.Info("Replication initialized")
+
+	// auto-drain this channel
+	go func() {
+		for range errCh {
+		}
+	}()
+
+	go func() {
+		// clear lock immediately on ctrl-C
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt)
+		<-signals
+		replication.Cancel()
+		os.Exit(1)
+	}()
+
+	go func() {
+		ds.replicationLock.Lock()
+
+		if ds.replicationOngoing {
+			ds.currentReplication.Cancel()
+			ds.replicationOngoing = false
+		}
+		// Set a new replication
+		ds.currentReplication = replication
+		ds.replicationOngoing = true
+
+		ds.replicationLock.Unlock()
+
+		// This function is blocking, so we can't defer the unlocks
+		replication.Enact()
+	}()
+
+	ds.logger.Info("Replication enacted")
+
+	return nil
+}
+
+func (ds *daemonSet) CancelReplication() {
+	ds.replicationLock.Lock()
+	defer ds.replicationLock.Unlock()
+
+	if ds.replicationOngoing == true {
+		ds.currentReplication.Cancel()
+		ds.replicationOngoing = false
+	}
 }
 
 func (ds *daemonSet) CurrentPods() (types.PodLocations, error) {

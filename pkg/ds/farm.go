@@ -11,6 +11,7 @@ import (
 	"github.com/square/p2/pkg/alerting"
 	"github.com/square/p2/pkg/ds/fields"
 	ds_fields "github.com/square/p2/pkg/ds/fields"
+	"github.com/square/p2/pkg/health/checker"
 	"github.com/square/p2/pkg/kp"
 	"github.com/square/p2/pkg/kp/dsstore"
 	"github.com/square/p2/pkg/labels"
@@ -33,6 +34,8 @@ type Farm struct {
 
 	logger  logging.Logger
 	alerter alerting.Alerter
+
+	healthChecker *checker.ConsulHealthChecker
 }
 
 type childDS struct {
@@ -55,14 +58,19 @@ func NewFarm(
 	}
 
 	return &Farm{
-		kpStore:    kpStore,
-		dsStore:    dsStore,
-		scheduler:  scheduler.NewApplicatorScheduler(applicator),
-		applicator: applicator,
-		children:   make(map[fields.ID]*childDS),
-		logger:     logger,
-		alerter:    alerter,
+		kpStore:       kpStore,
+		dsStore:       dsStore,
+		scheduler:     scheduler.NewApplicatorScheduler(applicator),
+		applicator:    applicator,
+		children:      make(map[fields.ID]*childDS),
+		logger:        logger,
+		alerter:       alerter,
+		healthChecker: nil,
 	}
+}
+
+func (dsf *Farm) SetFarmHealthChecker(toSet *checker.ConsulHealthChecker) {
+	dsf.healthChecker = toSet
 }
 
 func (dsf *Farm) Start(quitCh <-chan struct{}) {
@@ -141,6 +149,8 @@ func (dsf *Farm) cleanupDaemonSetPods(quitCh <-chan struct{}) {
 					if err != nil {
 						dsf.logger.NoFields().Errorf("Error removing ds pod id label '%v': %v", id, err)
 					}
+
+					// TODO: We still need to publish changes to replication here
 				}
 			}
 		}
@@ -384,6 +394,7 @@ func (dsf *Farm) spawnDaemonSet(dsFields *ds_fields.DaemonSet) *childDS {
 		dsf.applicator,
 		dsLogger,
 	)
+	ds.SetHealthChecker(dsf.healthChecker)
 
 	quitSpawnCh := make(chan struct{})
 	updatedCh := make(chan *ds_fields.DaemonSet)
