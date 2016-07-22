@@ -25,6 +25,25 @@ const (
 type DaemonSet interface {
 	ID() fields.ID
 
+	IsDisabled() bool
+
+	// Returns the daemon set's pod id
+	PodID() types.PodID
+
+	GetNodeSelector() klabels.Selector
+
+	// Returns a list of all nodes that are selected by this daemon set's selector
+	EligibleNodes() ([]types.NodeName, error)
+
+	// WatchDesires watches for changes to its daemon set, then schedule/unschedule
+	// pods to to the nodes that it is responsible for
+	//
+	// Whatever calls WatchDesires is responsible for sending signals for whether
+	// the daemon set updated or deleted
+	//
+	// When this is first called, it assumes that the daemon set is created
+	//
+	// The caller is responsible for sending signals when something has been changed
 	WatchDesires(
 		quitCh <-chan struct{},
 		updatedCh <-chan *fields.DaemonSet,
@@ -83,15 +102,18 @@ func (ds *daemonSet) ID() fields.ID {
 	return ds.DaemonSet.ID
 }
 
-// WatchDesires watches for changes to its daemon set, then schedule/unschedule
-// pods to to the nodes that it is responsible for
-//
-// Whatever calls WatchDesires is responsible for sending signals for whether
-// the daemon set updated or deleted
-//
-// When this is first called, it assumes that the daemon set is created
-//
-// The caller is responsible for sending signals when something has been changed
+func (ds *daemonSet) IsDisabled() bool {
+	return ds.DaemonSet.Disabled
+}
+
+func (ds *daemonSet) PodID() types.PodID {
+	return ds.DaemonSet.PodID
+}
+
+func (ds *daemonSet) GetNodeSelector() klabels.Selector {
+	return ds.DaemonSet.NodeSelector
+}
+
 func (ds *daemonSet) WatchDesires(
 	quitCh <-chan struct{},
 	updatedCh <-chan *fields.DaemonSet,
@@ -243,10 +265,12 @@ func (ds *daemonSet) addPods() error {
 	}
 	currentNodes := podLocations.Nodes()
 
-	eligible, err := ds.scheduler.EligibleNodes(ds.Manifest, ds.NodeSelector)
+	eligible, err := ds.EligibleNodes()
 	if err != nil {
 		return util.Errorf("Error retrieving eligible nodes for daemon set: %v", err)
 	}
+	// TODO: Grab a lock here for the pod_id before adding something to check
+	// contention and then disable
 
 	// Get the difference in nodes that we need to schedule on and then sort them
 	// for deterministic ordering
@@ -271,7 +295,7 @@ func (ds *daemonSet) removePods() error {
 	}
 	currentNodes := podLocations.Nodes()
 
-	eligible, err := ds.scheduler.EligibleNodes(ds.Manifest, ds.NodeSelector)
+	eligible, err := ds.EligibleNodes()
 	if err != nil {
 		return util.Errorf("Error retrieving eligible nodes for daemon set: %v", err)
 	}
@@ -288,6 +312,14 @@ func (ds *daemonSet) removePods() error {
 		}
 	}
 	return nil
+}
+
+func (ds *daemonSet) EligibleNodes() ([]types.NodeName, error) {
+	eligible, err := ds.scheduler.EligibleNodes(ds.Manifest, ds.NodeSelector)
+	if err != nil {
+		return eligible, util.Errorf("Error retrieving eligible nodes for daemon set: %v", err)
+	}
+	return eligible, nil
 }
 
 // clearPods unschedules pods for all the nodes that have been scheduled by
