@@ -13,6 +13,7 @@ import (
 	"github.com/square/p2/pkg/kp/consulutil"
 	"github.com/square/p2/pkg/kp/dsstore"
 	"github.com/square/p2/pkg/kp/flags"
+	"github.com/square/p2/pkg/kp/statusstore"
 	"github.com/square/p2/pkg/labels"
 	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/util/stream"
@@ -38,6 +39,7 @@ func main() {
 	client := kp.NewConsulClient(consulOpts)
 	logger := logging.NewLogger(logrus.Fields{})
 	dsStore := dsstore.NewConsul(client, 3, &logger)
+	statusStore := statusstore.NewConsul(client)
 	kpStore := kp.NewConsulStore(client)
 	applicator := labels.NewConsulApplicator(client, 3)
 	healthChecker := checker.NewConsulHealthChecker(client)
@@ -52,7 +54,7 @@ func main() {
 	pub := stream.NewStringValuePublisher(sessions, "")
 	dsSub := pub.Subscribe(nil)
 
-	dsf := ds_farm.NewFarm(kpStore, dsStore, applicator, dsSub.Chan(), logger, nil, &healthChecker)
+	dsf := ds_farm.NewFarm(kpStore, dsStore, statusStore, applicator, dsSub.Chan(), logger, nil, &healthChecker)
 
 	go func() {
 		// clear lock immediately on ctrl-C

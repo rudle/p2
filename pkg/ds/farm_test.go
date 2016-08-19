@@ -10,6 +10,8 @@ import (
 	"github.com/square/p2/pkg/kp"
 	"github.com/square/p2/pkg/kp/dsstore/dsstoretest"
 	"github.com/square/p2/pkg/kp/kptest"
+	"github.com/square/p2/pkg/kp/statusstore"
+	"github.com/square/p2/pkg/kp/statusstore/statusstoretest"
 	"github.com/square/p2/pkg/labels"
 	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/manifest"
@@ -29,7 +31,7 @@ func waitForFarm() {
 	// If the tests fail, increasing this value may fix your problem
 	// One reason is beacause of the request rate put on the the
 	// consulutil/watch's WatchDiff function which the farm --> dsStore uses
-	time.Sleep(250 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 }
 
 // Tests dsContends for changes to both daemon sets and nodes
@@ -47,10 +49,12 @@ func TestContendNodes(t *testing.T) {
 	var allNodes []types.NodeName
 	allNodes = append(allNodes, "node1")
 	happyHealthChecker := fake_checker.HappyHealthChecker(allNodes)
+	statusStore := statusstoretest.NewFake()
 
 	dsf := &Farm{
 		dsStore:       dsStore,
 		kpStore:       kpStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		children:      make(map[ds_fields.ID]*childDS),
@@ -161,10 +165,12 @@ func TestContendSelectors(t *testing.T) {
 
 	var allNodes []types.NodeName
 	happyHealthChecker := fake_checker.HappyHealthChecker(allNodes)
+	statusStore := statusstoretest.NewFake()
 
 	dsf := &Farm{
 		dsStore:       dsStore,
 		kpStore:       kpStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		children:      make(map[ds_fields.ID]*childDS),
@@ -318,10 +324,12 @@ func TestFarmSchedule(t *testing.T) {
 		allNodes = append(allNodes, types.NodeName(nodeName))
 	}
 	happyHealthChecker := fake_checker.HappyHealthChecker(allNodes)
+	statusStore := statusstoretest.NewFake()
 
 	dsf := &Farm{
 		dsStore:       dsStore,
 		kpStore:       kpStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		children:      make(map[ds_fields.ID]*childDS),
@@ -362,6 +370,12 @@ func TestFarmSchedule(t *testing.T) {
 	applicator.SetLabel(labels.NODE, "node1", pc_fields.AvailabilityZoneLabel, "az1")
 	waitForFarm()
 
+	// Check the Status Store
+	// TODO Encapsulate this lookup. the type tango is complex
+	status, err := statusStore.GetStatus(statusstore.DS, statusstore.ResourceID(dsData.ID.String()), StatusNamespace)
+	Assert(t).IsNil(err, "Unable to fetch status")
+	Assert(t).AreNotEqual(len(status.Bytes()), 0, "Expected to have a status JSON blob")
+
 	labeled, err := dsf.applicator.GetLabels(labels.POD, "node1/testPod")
 	Assert(t).IsNil(err, "Expected no error getting labels")
 	Assert(t).IsTrue(labeled.Labels.Has(DSIDLabel), "Expected pod to have a dsID label")
@@ -371,6 +385,12 @@ func TestFarmSchedule(t *testing.T) {
 	// Make a second node and verify that it was scheduled by the second daemon set
 	applicator.SetLabel(labels.NODE, "node2", pc_fields.AvailabilityZoneLabel, "az2")
 	waitForFarm()
+
+	// Check the Status Store
+	// TODO Encapsulate this lookup. the type tango is complex
+	status, err = statusStore.GetStatus(statusstore.DS, statusstore.ResourceID(dsID), StatusNamespace)
+	Assert(t).IsNil(err, "Unable to fetch status")
+	Assert(t).AreNotEqual(len(status.Bytes()), 0, "Expected to have some bytes for status, but none were here.")
 
 	labeled, err = dsf.applicator.GetLabels(labels.POD, "node2/testPod")
 	Assert(t).IsNil(err, "Expected no error getting labels")
@@ -532,9 +552,12 @@ func TestCleanupPods(t *testing.T) {
 	logger := logging.DefaultLogger.SubLogger(logrus.Fields{
 		"farm": "cleanupPods",
 	})
+	statusStore := statusstoretest.NewFake()
+
 	dsf := &Farm{
 		dsStore:       dsStore,
 		kpStore:       kpStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		children:      make(map[ds_fields.ID]*childDS),
@@ -568,6 +591,7 @@ func TestCleanupPods(t *testing.T) {
 func TestMultipleFarms(t *testing.T) {
 	dsStore := dsstoretest.NewFake()
 	kpStore := kptest.NewFakePodStore(make(map[kptest.FakePodStoreKey]manifest.Manifest), make(map[string]kp.WatchResult))
+	statusStore := statusstoretest.NewFake()
 	applicator := labels.NewFakeApplicator()
 	session := kptest.NewSession()
 	firstLogger := logging.DefaultLogger.SubLogger(logrus.Fields{
@@ -588,6 +612,7 @@ func TestMultipleFarms(t *testing.T) {
 	firstFarm := &Farm{
 		dsStore:       dsStore,
 		kpStore:       kpStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		children:      make(map[ds_fields.ID]*childDS),
@@ -612,6 +637,7 @@ func TestMultipleFarms(t *testing.T) {
 	secondFarm := &Farm{
 		dsStore:       dsStore,
 		kpStore:       kpStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		children:      make(map[ds_fields.ID]*childDS),

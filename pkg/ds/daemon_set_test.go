@@ -20,6 +20,7 @@ import (
 	. "github.com/anthonybishopric/gotcha"
 	ds_fields "github.com/square/p2/pkg/ds/fields"
 	fake_checker "github.com/square/p2/pkg/health/checker/test"
+	"github.com/square/p2/pkg/kp/statusstore/statusstoretest"
 	klabels "k8s.io/kubernetes/pkg/labels"
 )
 
@@ -156,10 +157,12 @@ func TestSchedule(t *testing.T) {
 		allNodes = append(allNodes, types.NodeName(nodeName))
 	}
 	happyHealthChecker := fake_checker.HappyHealthChecker(allNodes)
+	statusStore := statusstoretest.NewFake()
 
 	ds := New(
 		dsData,
 		dsStore,
+		statusStore,
 		kpStore,
 		applicator,
 		logging.DefaultLogger,
@@ -351,10 +354,12 @@ func TestPublishToReplication(t *testing.T) {
 		allNodes = append(allNodes, types.NodeName(nodeName))
 	}
 	happyHealthChecker := fake_checker.HappyHealthChecker(allNodes)
+	statusStore := statusstoretest.NewFake()
 
 	ds := New(
 		dsData,
 		dsStore,
+		statusStore,
 		kpStore,
 		applicator,
 		logging.DefaultLogger,

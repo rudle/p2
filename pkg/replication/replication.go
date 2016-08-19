@@ -52,6 +52,12 @@ type Replication interface {
 	// Will block until the r.quitCh is closed
 	// this is used to synchronize updates which quickly cancel and re-enact the replicaton
 	WaitForReplication()
+
+	// A cancel operation threads a signal through multiple channels to cleanup
+	// gracefully. This function will return when that has taken place.
+	// WaitForCancel()
+
+	GetTimedOutNodes() []types.NodeName
 }
 
 // A replication contains the information required to do a single replication (deploy).
@@ -88,11 +94,17 @@ type replication struct {
 	timedOutReplicationsMutex sync.Mutex
 }
 
+func (r *replication) GetTimedOutNodes() []types.NodeName {
+	r.timedOutReplicationsMutex.Lock()
+	defer r.timedOutReplicationsMutex.Unlock()
+	return r.timedOutReplications
+}
+
 // Attempts to claim a lock on replicating this pod. Other pkg/replication
 // operations for this pod ID will not be able to take place.
 // if overrideLock is true, will destroy any session holding any of the keys we
 // wish to lock
-func (r replication) lockHosts(overrideLock bool, lockMessage string) error {
+func (r *replication) lockHosts(overrideLock bool, lockMessage string) error {
 	session, renewalErrCh, err := r.store.NewSession(lockMessage, nil)
 	if err != nil {
 		return err
@@ -115,7 +127,7 @@ func (r replication) lockHosts(overrideLock bool, lockMessage string) error {
 
 // Attempts to claim a lock. If the overrideLock is set, any existing lock holder
 // will be destroyed and one more attempt will be made to acquire the lock
-func (r replication) lock(session kp.Session, lockPath string, overrideLock bool) (consulutil.Unlocker, error) {
+func (r *replication) lock(session kp.Session, lockPath string, overrideLock bool) (consulutil.Unlocker, error) {
 	unlocker, err := session.Lock(lockPath)
 
 	if _, ok := err.(consulutil.AlreadyLockedError); ok {
@@ -149,7 +161,7 @@ func (r replication) lock(session kp.Session, lockPath string, overrideLock bool
 // checkForManaged() checks whether there are any existing pods that this replication
 // would modify that are already managed by a controller. If there is such a pod, the
 // change should go through its controller, not here.
-func (r replication) checkForManaged() error {
+func (r *replication) checkForManaged() error {
 	var badNodes []string
 	for _, node := range r.nodes {
 		podID := path.Join(node.String(), string(r.manifest.ID()))
@@ -173,7 +185,7 @@ func (r replication) checkForManaged() error {
 // Execute the replication.
 // note: error management could use some improvement, errors coming out of
 // updateOne need to be scoped to the node that they came from
-func (r replication) Enact() {
+func (r *replication) Enact() {
 	defer close(r.replicationDoneCh)
 
 	// Sort nodes from least healthy to most healthy to maximize overall
@@ -243,12 +255,16 @@ func (r replication) Enact() {
 }
 
 // Cancels all goroutines (e.g. replication and lock renewal)
-func (r replication) Cancel() {
+// Will block until all go routines have exited cleanly
+func (r *replication) Cancel() {
 	close(r.replicationCancelledCh)
+	<-r.quitCh
 }
 
-func (r replication) WaitForReplication() {
+// Waits for this replication to complete for any reason
+func (r *replication) WaitForReplication() {
 	select {
+	case <-r.replicationDoneCh:
 	case <-r.quitCh:
 	}
 }
@@ -256,7 +272,7 @@ func (r replication) WaitForReplication() {
 // Listen for errors in lock renewal. If the lock can't be renewed, we need to
 // 1) stop replication and 2) communicate the error up a level
 // If replication finishes, destroy the lock
-func (r replication) handleRenewalErrors(session kp.Session, renewalErrCh chan error) {
+func (r *replication) handleRenewalErrors(session kp.Session, renewalErrCh chan error) {
 	defer func() {
 		close(r.quitCh)
 		close(r.errCh)
@@ -277,7 +293,7 @@ func (r replication) handleRenewalErrors(session kp.Session, renewalErrCh chan e
 }
 
 // note: logging should be delegated somehow
-func (r replication) updateOne(node types.NodeName, done chan<- types.NodeName, quitCh <-chan struct{}, aggregateHealth *podHealth) {
+func (r *replication) updateOne(node types.NodeName, done chan<- types.NodeName, quitCh <-chan struct{}, aggregateHealth *podHealth) {
 	targetSHA, _ := r.manifest.SHA()
 	nodeLogger := r.logger.SubLogger(logrus.Fields{"node": node})
 	nodeLogger.WithField("sha", targetSHA).Infoln("Updating node")

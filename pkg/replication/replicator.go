@@ -155,7 +155,7 @@ func (r replicator) initializeReplicationWithCheck(
 	if !ignoreControllers {
 		err = replication.checkForManaged()
 		if err != nil {
-			replication.Cancel()
+			go replication.Cancel()
 			return nil, errCh, err
 		}
 	}

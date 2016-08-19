@@ -1,6 +1,7 @@
 package ds
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/square/p2/pkg/kp"
 	"github.com/square/p2/pkg/kp/consulutil"
 	"github.com/square/p2/pkg/kp/dsstore"
+	"github.com/square/p2/pkg/kp/statusstore"
 	"github.com/square/p2/pkg/labels"
 	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/scheduler"
@@ -25,10 +27,11 @@ import (
 // Farm instatiates and deletes daemon sets as needed
 type Farm struct {
 	// constructor arguments
-	kpStore    kp.Store
-	dsStore    dsstore.Store
-	scheduler  scheduler.Scheduler
-	applicator labels.Applicator
+	kpStore     kp.Store
+	dsStore     dsstore.Store
+	statusStore statusstore.Store
+	scheduler   scheduler.Scheduler
+	applicator  labels.Applicator
 	// session stream for the daemon sets locked by this farm
 	sessions <-chan string
 
@@ -54,6 +57,7 @@ type childDS struct {
 func NewFarm(
 	kpStore kp.Store,
 	dsStore dsstore.Store,
+	statusStore statusstore.Store,
 	applicator labels.Applicator,
 	sessions <-chan string,
 	logger logging.Logger,
@@ -67,6 +71,7 @@ func NewFarm(
 	return &Farm{
 		kpStore:       kpStore,
 		dsStore:       dsStore,
+		statusStore:   statusStore,
 		scheduler:     scheduler.NewApplicatorScheduler(applicator),
 		applicator:    applicator,
 		sessions:      sessions,
@@ -76,6 +81,8 @@ func NewFarm(
 		healthChecker: healthChecker,
 	}
 }
+
+var StatusNamespace = statusstore.Namespace("replication_farm")
 
 func (dsf *Farm) Start(quitCh <-chan struct{}) {
 	consulutil.WithSession(quitCh, dsf.sessions, func(sessionQuit <-chan struct{}, sessionID string) {
@@ -537,6 +544,28 @@ func (dsf *Farm) raiseContentionAlert(oldDS DaemonSet, newDS ds_fields.DaemonSet
 	}
 }
 
+func (dsf *Farm) updateDaemonSetStatus(dsID fields.ID, s Status, failedNodes []types.NodeName) error {
+	statusDocument := map[string]string{
+		"status":      statusToString(s),
+		"failedNodes": fmt.Sprintf("%v", failedNodes),
+	}
+	jsonBytes, err := json.Marshal(statusDocument)
+	if err != nil {
+		return err
+	}
+	// if err != nil {
+	// 	dsf.logger.WithErrorAndFields(err, logrus.Fields{
+	// 		"dsID": ds.ID(),
+	// 		"pod":  ds.PodID(),
+	// 	}).Errorln("Unable to persist status for this daemon set.")
+	// }
+
+	return dsf.statusStore.SetStatus(statusstore.DS,
+		statusstore.ResourceID(dsID),
+		StatusNamespace,
+		jsonBytes)
+}
+
 // Creates a functioning daemon set that will watch and write to the pod tree
 func (dsf *Farm) spawnDaemonSet(
 	dsFields *ds_fields.DaemonSet,
@@ -546,6 +575,7 @@ func (dsf *Farm) spawnDaemonSet(
 	ds := New(
 		*dsFields,
 		dsf.dsStore,
+		dsf.statusStore,
 		dsf.kpStore,
 		dsf.applicator,
 		dsLogger,
@@ -555,6 +585,8 @@ func (dsf *Farm) spawnDaemonSet(
 	quitSpawnCh := make(chan struct{})
 	updatedCh := make(chan *ds_fields.DaemonSet)
 	deletedCh := make(chan *ds_fields.DaemonSet)
+
+	dsf.updateDaemonSetStatus(ds.ID(), StatusInProgress, []types.NodeName{})
 
 	desiresCh := ds.WatchDesires(quitSpawnCh, updatedCh, deletedCh)
 

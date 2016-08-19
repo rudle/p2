@@ -16,6 +16,7 @@ import (
 	"github.com/square/p2/pkg/ds/fields"
 	"github.com/square/p2/pkg/kp"
 	"github.com/square/p2/pkg/kp/dsstore"
+	"github.com/square/p2/pkg/kp/statusstore"
 	"github.com/square/p2/pkg/labels"
 	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/scheduler"
@@ -74,6 +75,7 @@ type daemonSet struct {
 	kpStore       kp.Store
 	scheduler     scheduler.Scheduler
 	dsStore       dsstore.Store
+	statusStore   statusstore.Store
 	applicator    labels.Applicator
 	healthChecker *checker.ConsulHealthChecker
 
@@ -89,6 +91,7 @@ type dsContention struct {
 func New(
 	fields fields.DaemonSet,
 	dsStore dsstore.Store,
+	statusStore statusstore.Store,
 	kpStore kp.Store,
 	applicator labels.Applicator,
 	logger logging.Logger,
@@ -98,6 +101,7 @@ func New(
 		DaemonSet: fields,
 
 		dsStore:            dsStore,
+		statusStore:        statusStore,
 		kpStore:            kpStore,
 		logger:             logger,
 		applicator:         applicator,
@@ -139,11 +143,15 @@ func (ds *daemonSet) WatchDesires(
 	errCh := make(chan error)
 	nodesChangedCh := ds.applicator.WatchMatchDiff(ds.NodeSelector, labels.NODE, quitCh)
 
+	_ = ds.updateStatus(StatusNotStarted, nil)
+
 	// Do something whenever something is changed
 	go func() {
 		var err error
 		defer close(errCh)
-		defer ds.cancelReplication()
+		defer func() {
+			go ds.cancelReplication()
+		}()
 
 		// Make a timer and stop it so the receieve from channel does not occur
 		// until a reset happens
@@ -198,7 +206,7 @@ func (ds *daemonSet) WatchDesires(
 				ds.DaemonSet = *newDS
 
 				if ds.Disabled {
-					ds.cancelReplication()
+					go ds.cancelReplication()
 					continue
 				}
 				err = ds.removePods()
@@ -350,7 +358,7 @@ func (ds *daemonSet) removePods() error {
 	toUnscheduleSorted := types.NewNodeSet(currentNodes...).Difference(types.NewNodeSet(eligible...)).ListNodes()
 	ds.logger.NoFields().Infof("Need to unschedule %d nodes", len(toUnscheduleSorted))
 
-	ds.cancelReplication()
+	go ds.cancelReplication()
 
 	for _, node := range toUnscheduleSorted {
 		err := ds.unschedule(node)
@@ -382,7 +390,7 @@ func (ds *daemonSet) clearPods() error {
 	toUnscheduleSorted := types.NewNodeSet(currentNodes...).ListNodes()
 	ds.logger.NoFields().Infof("Need to unschedule %d nodes", len(toUnscheduleSorted))
 
-	ds.cancelReplication()
+	go ds.cancelReplication()
 
 	for _, node := range toUnscheduleSorted {
 		err := ds.unschedule(node)
@@ -433,7 +441,7 @@ func (ds *daemonSet) unschedule(node types.NodeName) error {
 func (ds *daemonSet) PublishToReplication() error {
 	// We must cancel the replication because if we try to call
 	// InitializeReplicationWithCheck, we will get an error
-	ds.cancelReplication()
+	go ds.cancelReplication()
 
 	podLocations, err := ds.CurrentPods()
 	if err != nil {
@@ -509,6 +517,7 @@ func (ds *daemonSet) PublishToReplication() error {
 	ds.currentReplication = replication
 
 	go replication.Enact()
+	go ds.trackStatus()
 
 	ds.logger.Info("Replication enacted")
 
@@ -516,13 +525,23 @@ func (ds *daemonSet) PublishToReplication() error {
 }
 
 // It is also okay to call this multiple times because it keeps track of when
-// it has been cancelled by checking whether ds.currentReplication == nil
+// it has been canceled by checking whether ds.currentReplication == nil
+// This function blocks until replication has been halted
 func (ds *daemonSet) cancelReplication() {
 	if ds.currentReplication != nil {
-		ds.currentReplication.Cancel()
+		ds.currentReplication.Cancel() // blocks
+		ds.logger.Info("Replication canceled")
+	}
+}
+
+func (ds *daemonSet) trackStatus() {
+	ds.updateStatus(StatusInProgress, nil)
+	if ds.currentReplication != nil {
 		ds.currentReplication.WaitForReplication()
-		ds.logger.Info("Replication cancelled")
-		ds.currentReplication = nil
+		if ds.currentReplication != nil {
+			ds.updateStatus(StatusCompleted, ds.currentReplication.GetTimedOutNodes())
+			ds.currentReplication = nil
+		}
 	}
 }
 
