@@ -282,7 +282,7 @@ func (dsf *Farm) handleDSChanges(changes dsstore.WatchedDaemonSets, quitCh <-cha
 			}
 
 			if isContended {
-				dsf.logger.Errorf("Created daemon set '%s' contends with %s", dsFields.ID, dsIDContended)
+				dsf.logger.Errorf("Created daemon set '%s' contends with %s", dsFields.ID.String(), dsIDContended)
 				newDS, err := dsf.dsStore.Disable(dsFields.ID)
 				if err != nil {
 					dsf.logger.Errorf("Error occurred when trying to disable daemon set: %v", err)
