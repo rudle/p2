@@ -274,7 +274,7 @@ func (dsf *Farm) handleDSChanges(changes dsstore.WatchedDaemonSets, quitCh <-cha
 			}
 
 			// If the daemon set contends with another daemon set, disable it
-			dsIDContended, isContended, err := dsf.dsContends(dsFields)
+			contendedDS, isContended, err := dsf.dsContends(dsFields)
 			if err != nil {
 				dsf.logger.Errorf("Error occurred when trying to check for daemon set contention: %v", err)
 				dsf.releaseLock(dsUnlocker)
@@ -282,7 +282,8 @@ func (dsf *Farm) handleDSChanges(changes dsstore.WatchedDaemonSets, quitCh <-cha
 			}
 
 			if isContended {
-				dsf.logger.Errorf("Created daemon set '%s' contends with %s", dsFields.ID.String(), dsIDContended)
+				dsf.logger.Errorf("Created daemon set '%s/%s:%s' contends with %s/%s:%s",
+					dsFields.PodID.String(), dsFields.Name, dsFields.ID.String(), contendedDS.PodID.String(), contendedDS.Name, contendedDS.ID.String())
 				newDS, err := dsf.dsStore.Disable(dsFields.ID)
 				if err != nil {
 					dsf.logger.Errorf("Error occurred when trying to disable daemon set: %v", err)
@@ -320,14 +321,15 @@ func (dsf *Farm) handleDSChanges(changes dsstore.WatchedDaemonSets, quitCh <-cha
 			}
 
 			// If the daemon set contends with another daemon set, disable it
-			dsIDContended, isContended, err := dsf.dsContends(dsFields)
+			contendedDS, isContended, err := dsf.dsContends(dsFields)
 			if err != nil {
 				dsf.logger.Errorf("Error occurred when trying to check for daemon set contention: %v", err)
 				continue
 			}
 
 			if isContended {
-				dsf.logger.Errorf("Updated daemon set '%s' contends with %s", dsFields.ID, dsIDContended)
+				dsf.logger.Errorf("Created daemon set '%s/%s:%s' contends with %s/%s:%s",
+					dsFields.PodID.String(), dsFields.Name, dsFields.ID.String(), contendedDS.PodID.String(), contendedDS.Name, contendedDS.ID.String())
 				newDS, err := dsf.dsStore.Disable(dsFields.ID)
 				if err != nil {
 					dsf.logger.Errorf("Error occurred when trying to disable daemon set: %v", err)
@@ -413,15 +415,15 @@ func (dsf *Farm) releaseLock(unlocker consulutil.Unlocker) {
 // if two label selectors are labels.Everything()
 //
 // Returns [ daemon set contended, contention exists, error ]
-func (dsf *Farm) dsContends(dsFields *ds_fields.DaemonSet) (ds_fields.ID, bool, error) {
+func (dsf *Farm) dsContends(dsFields *ds_fields.DaemonSet) (*ds_fields.DaemonSet, bool, error) {
 	// This daemon set does not contend if it is disabled
 	if dsFields.Disabled {
-		return "", false, nil
+		return nil, false, nil
 	}
 	// Get all eligible nodes for this daemon set by looking at the labes.NODE tree
 	eligibleNodes, err := dsf.scheduler.EligibleNodes(dsFields.Manifest, dsFields.NodeSelector)
 	if err != nil {
-		return "", false, util.Errorf("Error retrieving eligible nodes for daemon set: %v", err)
+		return nil, false, util.Errorf("Error retrieving eligible nodes for daemon set: %v", err)
 	}
 
 	// If this daemon set has a node selector set to Everything, check the labels
@@ -441,7 +443,7 @@ func (dsf *Farm) dsContends(dsFields *ds_fields.DaemonSet) (ds_fields.ID, bool, 
 			if dsFields.NodeSelector.String() == everythingSelector ||
 				child.ds.GetNodeSelector().String() == everythingSelector {
 				dsf.raiseContentionAlert(child.ds, *dsFields)
-				return child.ds.ID(), true, nil
+				return child.ds, true, nil
 			}
 
 			// If both daemon sets have the same selector, then they contend
@@ -451,7 +453,7 @@ func (dsf *Farm) dsContends(dsFields *ds_fields.DaemonSet) (ds_fields.ID, bool, 
 			// even though they don't select anything
 			if dsFields.NodeSelector.String() == child.ds.GetNodeSelector().String() {
 				dsf.raiseContentionAlert(child.ds, *dsFields)
-				return child.ds.ID(), true, nil
+				return child.ds, true, nil
 			}
 
 			// Check the child's eligibleNodes, then intersect it to see if there
@@ -462,17 +464,17 @@ func (dsf *Farm) dsContends(dsFields *ds_fields.DaemonSet) (ds_fields.ID, bool, 
 			// are starting up a daemon set farm where contention already exists
 			scheduledNodes, err := child.ds.EligibleNodes()
 			if err != nil {
-				return "", false, util.Errorf("Error getting scheduled nodes: %v", err)
+				return nil, false, util.Errorf("Error getting scheduled nodes: %v", err)
 			}
 			intersectedNodes := types.NewNodeSet(eligibleNodes...).Intersection(types.NewNodeSet(scheduledNodes...))
 			if intersectedNodes.Len() > 0 {
 				dsf.raiseContentionAlert(child.ds, *dsFields)
-				return child.ds.ID(), true, nil
+				return child.ds, true, nil
 			}
 		}
 	}
 
-	return "", false, nil
+	return nil, false, nil
 }
 
 func (dsf *Farm) raiseContentionAlert(oldDS DaemonSet, newDS ds_fields.DaemonSet) {

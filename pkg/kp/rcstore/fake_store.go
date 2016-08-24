@@ -3,6 +3,7 @@ package rcstore
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	"k8s.io/kubernetes/pkg/labels"
 
@@ -16,6 +17,7 @@ import (
 type fakeStore struct {
 	rcs     map[fields.ID]*fakeEntry
 	creates int
+	rcMutex map[fields.ID]*sync.Mutex
 }
 
 type fakeEntry struct {
@@ -32,6 +34,7 @@ func NewFake() *fakeStore {
 	return &fakeStore{
 		rcs:     make(map[fields.ID]*fakeEntry),
 		creates: 0,
+		rcMutex: make(map[fields.ID]*sync.Mutex),
 	}
 }
 
@@ -54,6 +57,7 @@ func (s *fakeStore) Create(manifest manifest.Manifest, nodeSelector labels.Selec
 		lastWatcherId: 0,
 	}
 
+	s.rcMutex[id] = &sync.Mutex{}
 	s.rcs[id] = &entry
 
 	return entry.RC, nil
@@ -105,7 +109,9 @@ func (s *fakeStore) Enable(id fields.ID) error {
 		return util.Errorf("Nonexistent RC")
 	}
 
+	s.rcMutex[id].Lock()
 	entry.Disabled = false
+	s.rcMutex[id].Unlock()
 	for _, channel := range entry.watchers {
 		channel <- struct{}{}
 	}
@@ -118,7 +124,9 @@ func (s *fakeStore) SetDesiredReplicas(id fields.ID, n int) error {
 		return util.Errorf("Nonexistent RC")
 	}
 
+	s.rcMutex[id].Lock()
 	entry.ReplicasDesired = n
+	s.rcMutex[id].Unlock()
 	for _, channel := range entry.watchers {
 		channel <- struct{}{}
 	}
@@ -131,10 +139,12 @@ func (s *fakeStore) AddDesiredReplicas(id fields.ID, n int) error {
 		return util.Errorf("Nonexistent RC")
 	}
 
+	s.rcMutex[id].Lock()
 	entry.ReplicasDesired += n
 	if entry.ReplicasDesired < 0 {
 		entry.ReplicasDesired = 0
 	}
+	s.rcMutex[id].Unlock()
 	for _, channel := range entry.watchers {
 		channel <- struct{}{}
 	}
@@ -156,7 +166,9 @@ func (s *fakeStore) Delete(id fields.ID, force bool) error {
 		close(channel)
 	}
 
+	s.rcMutex[id].Lock()
 	delete(s.rcs, id)
+	s.rcMutex[id].Unlock()
 	return nil
 }
 
@@ -173,10 +185,11 @@ func (s *fakeStore) Watch(rc *fields.RC, quit <-chan struct{}) (<-chan struct{},
 
 	errors := make(chan error)
 	updatesIn := make(chan struct{})
-	entry.lastWatcherId += 1
+	s.rcMutex[entry.RC.ID].Lock()
+	entry.lastWatcherId++
 	id := entry.lastWatcherId
 	entry.watchers[id] = updatesIn
-
+	s.rcMutex[entry.RC.ID].Unlock()
 	go func() {
 		<-quit
 		// Delete() may have closed updatesIn already!
@@ -189,6 +202,8 @@ func (s *fakeStore) Watch(rc *fields.RC, quit <-chan struct{}) (<-chan struct{},
 
 	go func() {
 		for range updatesIn {
+			s.rcMutex[entry.RC.ID].Lock()
+			defer s.rcMutex[entry.RC.ID].Unlock()
 			*rc = entry.RC
 			updatesOut <- struct{}{}
 		}
