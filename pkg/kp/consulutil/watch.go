@@ -3,8 +3,11 @@ package consulutil
 import (
 	"bytes"
 	"time"
+	"unsafe"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/rcrowley/go-metrics"
+	p2metrics "github.com/square/p2/pkg/metrics"
 )
 
 // WatchPrefix watches a Consul prefix for changes to any keys that have the prefix. When
@@ -26,23 +29,36 @@ func WatchPrefix(
 ) {
 	defer close(outPairs)
 	var currentIndex uint64
-	if pause < time.Second {
-		pause = time.Second
-	}
-	timer := time.NewTimer(time.Duration(pause))
 
 	// Pause signifies the amount of time to wait after a result is
 	// returned by the watch. Some use cases may want to respond quickly to
 	// a change after a period of stagnation, but are able to tolerate a
 	// degree of staleness in order to reduce QPS on the data store
+	if pause < time.Second {
+		pause = time.Second
+	}
+	timer := time.NewTimer(time.Duration(pause))
+
+	listLatencyHistogram, consulLatencyHistogram, outputPairsBlocking, outputPairsHistogram := watchHistograms("prefix")
+
+	var (
+		safeListStart    time.Time
+		outputPairsStart time.Time
+	)
 	for {
 		select {
 		case <-done:
+			return
 		default:
 		}
+		safeListStart = time.Now()
 		pairs, queryMeta, err := SafeList(clientKV, done, prefix, &api.QueryOptions{
 			WaitIndex: currentIndex,
 		})
+		listLatencyHistogram.Update(int64(time.Since(safeListStart) / time.Millisecond))
+		if queryMeta != nil {
+			consulLatencyHistogram.Update(int64(queryMeta.RequestTime))
+		}
 		<-timer.C
 		timer.Reset(pause)
 		switch err {
@@ -50,10 +66,13 @@ func WatchPrefix(
 			return
 		case nil:
 			currentIndex = queryMeta.LastIndex
+			outputPairsStart = time.Now()
 			select {
 			case <-done:
 			case outPairs <- pairs:
 			}
+			outputPairsBlocking.Update(int64(time.Since(outputPairsStart) / time.Millisecond))
+			outputPairsHistogram.Update(int64(unsafe.Sizeof(pairs)))
 		default:
 			select {
 			case <-done:
@@ -61,6 +80,15 @@ func WatchPrefix(
 			}
 		}
 	}
+}
+
+func watchHistograms(watchType string) (listLatency metrics.Histogram, consulLatency metrics.Histogram, outputPairsWait metrics.Histogram, outputPairsBytes metrics.Histogram) {
+	listLatency = metrics.GetOrRegisterHistogram("list_latency", p2metrics.Registry, metrics.NewExpDecaySample(1028, 0.015))
+	consulLatency = metrics.GetOrRegisterHistogram("consul_latency", p2metrics.Registry, metrics.NewExpDecaySample(1028, 0.015))
+	outputPairsWait = metrics.GetOrRegisterHistogram("output_pairs_wait", p2metrics.Registry, metrics.NewExpDecaySample(1028, 0.015))
+	outputPairsBytes = metrics.GetOrRegisterHistogram("output_pairs_bytes", p2metrics.Registry, metrics.NewExpDecaySample(1028, 0.015))
+
+	return
 }
 
 // WatchSingle has the same semantics as WatchPrefix, but for a single key in
@@ -79,25 +107,37 @@ func WatchSingle(
 	var currentIndex uint64
 	timer := time.NewTimer(time.Duration(0))
 
+	listLatencyHistogram, consulLatencyHistogram, outputPairsBlocking, _ := watchHistograms("single")
+
+	var (
+		safeGetStart    time.Time
+		outputPairStart time.Time
+	)
+
 	for {
 		select {
 		case <-done:
 			return
 		case <-timer.C:
 		}
+		safeGetStart = time.Now()
 		timer.Reset(250 * time.Millisecond) // upper bound on request rate
 		kvp, queryMeta, err := SafeGet(clientKV, done, key, &api.QueryOptions{
 			WaitIndex: currentIndex,
 		})
+		listLatencyHistogram.Update(int64(time.Since(safeGetStart) / time.Millisecond))
+		consulLatencyHistogram.Update(int64(queryMeta.RequestTime))
 		switch err {
 		case CanceledError:
 			return
 		case nil:
+			outputPairStart = time.Now()
 			currentIndex = queryMeta.LastIndex
 			select {
 			case <-done:
 			case outKVP <- kvp:
 			}
+			outputPairsBlocking.Update(int64(time.Since(outputPairStart) / time.Millisecond))
 		default:
 			select {
 			case <-done:
@@ -244,6 +284,12 @@ func WatchDiff(
 		var currentIndex uint64
 		timer := time.NewTimer(time.Duration(0))
 
+		listLatencyHistogram, consulLatencyHistogram, outputPairsBlocking, outputPairsHistogram := watchHistograms("diff")
+
+		var (
+			safeListStart    time.Time
+			outputPairsStart time.Time
+		)
 		for {
 			select {
 			case <-quitCh:
@@ -252,9 +298,13 @@ func WatchDiff(
 			}
 			timer.Reset(250 * time.Millisecond) // upper bound on request rate
 
+			safeListStart = time.Now()
 			pairs, queryMeta, err := SafeList(clientKV, quitCh, prefix, &api.QueryOptions{
 				WaitIndex: currentIndex,
 			})
+			listLatencyHistogram.Update(int64(time.Since(safeListStart) / time.Millisecond))
+			consulLatencyHistogram.Update(int64(queryMeta.RequestTime))
+
 			if err == CanceledError {
 				select {
 				case <-quitCh:
@@ -308,10 +358,13 @@ func WatchDiff(
 				}
 			}
 
+			outputPairsStart = time.Now()
 			select {
 			case <-quitCh:
 			case outCh <- outgoingChanges:
 			}
+			outputPairsBlocking.Update(int64(time.Since(outputPairsStart) / time.Millisecond))
+			outputPairsHistogram.Update(int64(unsafe.Sizeof(pairs)))
 		}
 	}()
 
