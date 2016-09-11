@@ -2,6 +2,7 @@ package consulutil
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/hashicorp/consul/api"
@@ -38,22 +39,28 @@ func WatchPrefix(
 	for {
 		select {
 		case <-done:
+			return
 		default:
 		}
+		fmt.Printf("safe list is very slow?\n")
 		pairs, queryMeta, err := SafeList(clientKV, done, prefix, &api.QueryOptions{
 			WaitIndex: currentIndex,
 		})
+		fmt.Printf("It seems that way\n")
 		<-timer.C
+		fmt.Printf("read from timer\n")
 		timer.Reset(pause)
 		switch err {
 		case CanceledError:
 			return
 		case nil:
 			currentIndex = queryMeta.LastIndex
+			fmt.Printf("let's put the results on the channel\n")
 			select {
 			case <-done:
 			case outPairs <- pairs:
 			}
+			fmt.Printf("done\n")
 		default:
 			select {
 			case <-done:
