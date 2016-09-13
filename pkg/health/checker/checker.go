@@ -7,10 +7,12 @@ import (
 	"github.com/square/p2/pkg/health"
 	"github.com/square/p2/pkg/kp"
 	"github.com/square/p2/pkg/kp/consulutil"
+	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/types"
 	"github.com/square/p2/pkg/util"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/rcrowley/go-metrics"
 )
 
 type ConsulHealthChecker interface {
@@ -150,7 +152,7 @@ func (c consulHealthChecker) WatchHealth(
 	// closed by watchPrefix when we close quitWatch
 	inCh := make(chan api.KVPairs)
 	watchErrCh := make(chan error)
-	go consulutil.WatchPrefix("health/", c.kv, inCh, quitCh, watchErrCh, 1*time.Second)
+	go consulutil.WatchPrefix("health/", c.kv, inCh, quitCh, watchErrCh, 1*time.Second, metrics.NewRegistry(), logging.DefaultLogger)
 	publishErrCh := publishLatestHealth(inCh, quitCh, resultCh)
 
 	for {

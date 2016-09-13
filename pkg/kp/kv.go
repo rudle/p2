@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/pborman/uuid"
+	"github.com/rcrowley/go-metrics"
 
 	"github.com/square/p2/pkg/kp/consulutil"
 	"github.com/square/p2/pkg/kp/podstore"
@@ -312,7 +313,7 @@ func (c consulStore) WatchPod(
 	}
 
 	kvpChan := make(chan *api.KVPair)
-	go consulutil.WatchSingle(key, c.client.KV(), kvpChan, quitChan, errChan)
+	go consulutil.WatchSingle(key, c.client.KV(), kvpChan, quitChan, errChan, metrics.NewRegistry(), logging.DefaultLogger)
 	for pair := range kvpChan {
 		out := ManifestResult{}
 		if pair != nil {
@@ -361,7 +362,7 @@ func (c consulStore) WatchPods(
 	}
 
 	kvPairsChan := make(chan api.KVPairs)
-	go consulutil.WatchPrefix(keyPrefix, c.client.KV(), kvPairsChan, quitChan, errChan, 0)
+	go consulutil.WatchPrefix(keyPrefix, c.client.KV(), kvPairsChan, quitChan, errChan, 0, metrics.NewRegistry(), logging.DefaultLogger)
 	for kvPairs := range kvPairsChan {
 		manifests := make([]ManifestResult, 0, len(kvPairs))
 		for _, pair := range kvPairs {
@@ -395,7 +396,7 @@ func (c consulStore) WatchAllPods(
 	defer close(podChan)
 
 	kvPairsChan := make(chan api.KVPairs)
-	go consulutil.WatchPrefix(string(podPrefix), c.client.KV(), kvPairsChan, quitChan, errChan, pauseTime)
+	go consulutil.WatchPrefix(string(podPrefix), c.client.KV(), kvPairsChan, quitChan, errChan, pauseTime, metrics.NewRegistry(), logging.DefaultLogger)
 	for kvPairs := range kvPairsChan {
 		manifests := make([]ManifestResult, 0, len(kvPairs))
 		for _, pair := range kvPairs {

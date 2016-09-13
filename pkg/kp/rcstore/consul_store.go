@@ -9,11 +9,13 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/pborman/uuid"
+	"github.com/rcrowley/go-metrics"
 	klabels "k8s.io/kubernetes/pkg/labels"
 
 	"github.com/square/p2/pkg/kp"
 	"github.com/square/p2/pkg/kp/consulutil"
 	"github.com/square/p2/pkg/labels"
+	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/manifest"
 	"github.com/square/p2/pkg/rc/fields"
 	"github.com/square/p2/pkg/util"
@@ -62,9 +64,11 @@ type consulKV interface {
 }
 
 type consulStore struct {
-	applicator labels.Applicator
-	kv         consulKV
-	retries    int
+	applicator      labels.Applicator
+	kv              consulKV
+	retries         int
+	logger          logging.Logger
+	metricsRegistry metrics.Registry
 }
 
 // TODO: combine with similar CASError type in pkg/labels
@@ -76,11 +80,13 @@ func (e CASError) Error() string {
 
 var _ Store = &consulStore{}
 
-func NewConsul(client consulutil.ConsulClient, retries int) *consulStore {
+func NewConsul(client consulutil.ConsulClient, retries int, logger logging.Logger, metricsRegistry metrics.Registry) *consulStore {
 	return &consulStore{
-		retries:    retries,
-		applicator: labels.NewConsulApplicator(client, retries),
-		kv:         client.KV(),
+		retries:         retries,
+		applicator:      labels.NewConsulApplicator(client, retries),
+		kv:              client.KV(),
+		logger:          logger,
+		metricsRegistry: metricsRegistry,
 	}
 }
 
@@ -185,7 +191,7 @@ func (s *consulStore) WatchNew(quit <-chan struct{}) (<-chan []fields.RC, <-chan
 	inCh := make(chan api.KVPairs)
 
 	outCh, errCh := publishLatestRCs(inCh, quit)
-	go consulutil.WatchPrefix(rcTree+"/", s.kv, inCh, quit, errCh, 1*time.Second)
+	go consulutil.WatchPrefix(rcTree+"/", s.kv, inCh, quit, errCh, 1*time.Second, s.metricsRegistry, s.logger)
 
 	return outCh, errCh
 }
@@ -215,7 +221,7 @@ func (s *consulStore) WatchNewWithRCLockInfo(quit <-chan struct{}) (<-chan []RCL
 	combinedErrCh := make(chan error)
 
 	rcCh, rcErrCh := publishLatestRCs(inCh, quit)
-	go consulutil.WatchPrefix(rcTree+"/", s.kv, inCh, quit, rcErrCh, 1*time.Second)
+	go consulutil.WatchPrefix(rcTree+"/", s.kv, inCh, quit, rcErrCh, 1*time.Second, s.metricsRegistry, s.logger)
 
 	// Process RC updates and augment them with lock information
 	outCh, lockInfoErrCh := s.publishLatestRCsWithLockInfo(rcCh, quit)
@@ -564,7 +570,7 @@ func (s *consulStore) Watch(rc *fields.RC, quit <-chan struct{}) (<-chan struct{
 
 	errors := make(chan error)
 	input := make(chan *api.KVPair)
-	go consulutil.WatchSingle(rcp, s.kv, input, quit, errors)
+	go consulutil.WatchSingle(rcp, s.kv, input, quit, errors, s.metricsRegistry, s.logger)
 
 	go func() {
 		defer close(updated)

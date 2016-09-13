@@ -91,7 +91,7 @@ func main() {
 	cmd, consulOpts := flags.ParseWithConsulOptions()
 	client := kp.NewConsulClient(consulOpts)
 	logger := logging.NewLogger(logrus.Fields{})
-	dsstore := dsstore.NewConsul(client, 3, &logger)
+	dsstore := dsstore.NewConsul(client, 3, &logger, nil)
 	applicator := labels.NewConsulApplicator(client, 3)
 
 	switch cmd {

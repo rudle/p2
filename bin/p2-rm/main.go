@@ -14,6 +14,7 @@ import (
 	"github.com/square/p2/pkg/kp/flags"
 	"github.com/square/p2/pkg/kp/rcstore"
 	"github.com/square/p2/pkg/labels"
+	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/rc"
 	"github.com/square/p2/pkg/rc/fields"
 	"github.com/square/p2/pkg/types"
@@ -45,7 +46,7 @@ func NewP2RM(client consulutil.ConsulClient, podName string, nodeName types.Node
 	rm := &P2RM{}
 	rm.Client = client
 	rm.Store = kp.NewConsulStore(client)
-	rm.RCStore = rcstore.NewConsul(client, 5)
+	rm.RCStore = rcstore.NewConsul(client, 5, logging.DefaultLogger, nil)
 	rm.Labeler = labels.NewConsulApplicator(client, 3)
 	rm.LabelID = path.Join(nodeName.String(), podName)
 	rm.PodName = podName

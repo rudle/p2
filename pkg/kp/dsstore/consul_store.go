@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/pborman/uuid"
+	"github.com/rcrowley/go-metrics"
 	klabels "k8s.io/kubernetes/pkg/labels"
 
 	"github.com/square/p2/pkg/ds/fields"
@@ -29,10 +30,11 @@ type consulKV interface {
 }
 
 type consulStore struct {
-	applicator labels.Applicator
-	kv         consulKV
-	logger     logging.Logger
-	retries    int
+	applicator      labels.Applicator
+	kv              consulKV
+	logger          logging.Logger
+	retries         int
+	metricsRegistry metrics.Registry
 }
 
 // TODO: combine with similar CASError type in pkg/labels
@@ -45,12 +47,13 @@ func (e CASError) Error() string {
 // Make sure functions declared in the Store interface have the proper contract
 var _ Store = &consulStore{}
 
-func NewConsul(client consulutil.ConsulClient, retries int, logger *logging.Logger) Store {
+func NewConsul(client consulutil.ConsulClient, retries int, logger *logging.Logger, metricsRegistry metrics.Registry) Store {
 	return &consulStore{
-		retries:    retries,
-		applicator: labels.NewConsulApplicator(client, retries),
-		kv:         client.KV(),
-		logger:     *logger,
+		retries:         retries,
+		applicator:      labels.NewConsulApplicator(client, retries),
+		kv:              client.KV(),
+		logger:          *logger,
+		metricsRegistry: metricsRegistry,
 	}
 }
 
@@ -245,7 +248,7 @@ func (s *consulStore) Watch(quitCh <-chan struct{}) <-chan WatchedDaemonSets {
 	errCh := make(chan error, 1)
 
 	// Watch for changes in the dsTree and deletedDSTree
-	inCh := consulutil.WatchDiff(dsTree, s.kv, quitCh, errCh)
+	inCh := consulutil.WatchDiff(dsTree, s.kv, quitCh, errCh, s.metricsRegistry, s.logger)
 
 	go func() {
 		defer close(outCh)
@@ -335,7 +338,7 @@ func (s *consulStore) WatchAll(quitCh <-chan struct{}) <-chan WatchedDaemonSetLi
 	errCh := make(chan error, 1)
 
 	// Watch for changes in the dsTree and deletedDSTree
-	go consulutil.WatchPrefix(dsTree, s.kv, inCh, quitCh, errCh, 5*time.Second)
+	go consulutil.WatchPrefix(dsTree, s.kv, inCh, quitCh, errCh, 5*time.Second, s.metricsRegistry, s.logger)
 
 	go func() {
 		defer close(outCh)

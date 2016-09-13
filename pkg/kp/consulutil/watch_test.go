@@ -8,6 +8,8 @@ import (
 
 	. "github.com/anthonybishopric/gotcha"
 	"github.com/hashicorp/consul/api"
+	metrics "github.com/rcrowley/go-metrics"
+	"github.com/square/p2/pkg/logging"
 )
 
 // PairRecord is a record of a single update to the Consul KV store
@@ -164,7 +166,7 @@ func TestWatchPrefix(t *testing.T) {
 
 	// Process existing data
 	f.Client.KV().Put(kv1a, nil)
-	go WatchPrefix("prefix/", f.Client.KV(), pairsChan, done, testLogger(t), 0)
+	go WatchPrefix("prefix/", f.Client.KV(), pairsChan, done, testLogger(t), 0, metrics.NewRegistry(), logging.DefaultLogger)
 	pairs := kvToMap(<-pairsChan)
 	if !kvMatch(pairs, kv1a) {
 		t.Error("existing data not recognized")
@@ -225,7 +227,7 @@ func TestWatchSingle(t *testing.T) {
 
 	// Process existing data
 	f.Client.KV().Put(kv1a, nil)
-	go WatchSingle("hello", f.Client.KV(), kvpChan, done, testLogger(t))
+	go WatchSingle("hello", f.Client.KV(), kvpChan, done, testLogger(t), metrics.NewRegistry(), logging.DefaultLogger)
 	if !kvEqual(kv1a, <-kvpChan) {
 		t.Error("existing data not recognized")
 	}
@@ -476,7 +478,7 @@ func TestWatchDiff(t *testing.T) {
 		t.Error("Unexpected error during put operation")
 	}
 
-	watchedCh := WatchDiff("prefix/", f.Client.KV(), done, testLogger(t))
+	watchedCh := WatchDiff("prefix/", f.Client.KV(), done, testLogger(t), metrics.NewRegistry(), logging.DefaultLogger)
 	select {
 	case changes = <-watchedCh:
 	case <-time.After(2 * time.Second):

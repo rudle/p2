@@ -2,10 +2,13 @@ package consulutil
 
 import (
 	"bytes"
-	"fmt"
 	"time"
+	"unsafe"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/hashicorp/consul/api"
+	"github.com/rcrowley/go-metrics"
+	"github.com/square/p2/pkg/logging"
 )
 
 // WatchPrefix watches a Consul prefix for changes to any keys that have the prefix. When
@@ -24,49 +27,152 @@ func WatchPrefix(
 	done <-chan struct{},
 	outErrors chan<- error,
 	pause time.Duration,
+	metricsRegistry metrics.Registry,
+	logger logging.Logger,
 ) {
 	defer close(outPairs)
 	var currentIndex uint64
-	if pause < time.Second {
-		pause = time.Second
-	}
-	timer := time.NewTimer(time.Duration(pause))
 
 	// Pause signifies the amount of time to wait after a result is
 	// returned by the watch. Some use cases may want to respond quickly to
 	// a change after a period of stagnation, but are able to tolerate a
 	// degree of staleness in order to reduce QPS on the data store
+	if pause < time.Second {
+		pause = time.Second
+	}
+	timer := time.NewTimer(time.Duration(pause))
+
+	if metricsRegistry == nil {
+		// in-memory metrics are better than nothing. We'll log these periodically
+		metricsRegistry = metrics.NewRegistry()
+	}
+	listLatencyHistogram, consulLatencyHistogram, outputPairsBlocking, outputPairsHistogram := watchHistograms("prefix", metricsRegistry)
+	go metricsLog(metricsRegistry, 5*time.Minute, logger.WithField("WatchType", "Prefix"))
+
+	var (
+		safeListStart    time.Time
+		outputPairsStart time.Time
+	)
 	for {
 		select {
 		case <-done:
 			return
 		default:
 		}
-		fmt.Printf("safe list is very slow?\n")
+		safeListStart = time.Now()
 		pairs, queryMeta, err := SafeList(clientKV, done, prefix, &api.QueryOptions{
 			WaitIndex: currentIndex,
 		})
-		fmt.Printf("It seems that way\n")
+		listLatencyHistogram.Update(int64(time.Since(safeListStart) / time.Millisecond))
+		if queryMeta != nil {
+			consulLatencyHistogram.Update(int64(queryMeta.RequestTime))
+		}
 		<-timer.C
-		fmt.Printf("read from timer\n")
 		timer.Reset(pause)
 		switch err {
 		case CanceledError:
+			logger.WithErrorAndFields(err, logrus.Fields{
+				"prefix": prefix,
+			}).Errorln("SafeList was canceled")
 			return
 		case nil:
 			currentIndex = queryMeta.LastIndex
-			fmt.Printf("let's put the results on the channel\n")
+			outputPairsStart = time.Now()
 			select {
 			case <-done:
 			case outPairs <- pairs:
 			}
-			fmt.Printf("done\n")
+			outputPairsBlocking.Update(int64(time.Since(outputPairsStart) / time.Millisecond))
+			outputPairsHistogram.Update(int64(unsafe.Sizeof(pairs)))
 		default:
+			logger.WithErrorAndFields(err, logrus.Fields{
+				"prefix": prefix,
+			}).Errorln("Encountered error during SafeList")
 			select {
 			case <-done:
 			case outErrors <- err:
 			}
 		}
+	}
+}
+
+func watchHistograms(watchType string, metricsRegistry metrics.Registry) (listLatency metrics.Histogram, consulLatency metrics.Histogram, outputPairsWait metrics.Histogram, outputPairsBytes metrics.Histogram) {
+	listLatency = metrics.GetOrRegisterHistogram("list_latency", metricsRegistry, metrics.NewExpDecaySample(1028, 0.015))
+	consulLatency = metrics.GetOrRegisterHistogram("consul_latency", metricsRegistry, metrics.NewExpDecaySample(1028, 0.015))
+	outputPairsWait = metrics.GetOrRegisterHistogram("output_pairs_wait", metricsRegistry, metrics.NewExpDecaySample(1028, 0.015))
+	outputPairsBytes = metrics.GetOrRegisterHistogram("output_pairs_bytes", metricsRegistry, metrics.NewExpDecaySample(1028, 0.015))
+
+	return
+}
+
+func metricsLog(r metrics.Registry, freq time.Duration, l logging.Logger) {
+	logScaled(r, freq, time.Millisecond, l)
+}
+
+// Output each metric in the given registry periodically using the given
+// logger. Print timings in `scale` units (eg time.Millisecond) rather than nanos.
+func logScaled(r metrics.Registry, freq time.Duration, scale time.Duration, l logging.Logger) {
+	du := float64(scale)
+	duSuffix := scale.String()[1:]
+
+	for _ = range time.Tick(freq) {
+		r.Each(func(name string, i interface{}) {
+			switch metric := i.(type) {
+			case metrics.Counter:
+				l.Printf("counter %s\n", name)
+				l.Printf("  count:       %9d\n", metric.Count())
+			case metrics.Gauge:
+				l.Printf("gauge %s\n", name)
+				l.Printf("  value:       %9d\n", metric.Value())
+			case metrics.GaugeFloat64:
+				l.Printf("gauge %s\n", name)
+				l.Printf("  value:       %f\n", metric.Value())
+			case metrics.Healthcheck:
+				metric.Check()
+				l.Printf("healthcheck %s\n", name)
+				l.Printf("  error:       %v\n", metric.Error())
+			case metrics.Histogram:
+				h := metric.Snapshot()
+				ps := h.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+				l.Printf("histogram %s\n", name)
+				l.Printf("  count:       %9d\n", h.Count())
+				l.Printf("  min:         %9d\n", h.Min())
+				l.Printf("  max:         %9d\n", h.Max())
+				l.Printf("  mean:        %12.2f\n", h.Mean())
+				l.Printf("  stddev:      %12.2f\n", h.StdDev())
+				l.Printf("  median:      %12.2f\n", ps[0])
+				l.Printf("  75%%:         %12.2f\n", ps[1])
+				l.Printf("  95%%:         %12.2f\n", ps[2])
+				l.Printf("  99%%:         %12.2f\n", ps[3])
+				l.Printf("  99.9%%:       %12.2f\n", ps[4])
+			case metrics.Meter:
+				m := metric.Snapshot()
+				l.Printf("meter %s\n", name)
+				l.Printf("  count:       %9d\n", m.Count())
+				l.Printf("  1-min rate:  %12.2f\n", m.Rate1())
+				l.Printf("  5-min rate:  %12.2f\n", m.Rate5())
+				l.Printf("  15-min rate: %12.2f\n", m.Rate15())
+				l.Printf("  mean rate:   %12.2f\n", m.RateMean())
+			case metrics.Timer:
+				t := metric.Snapshot()
+				ps := t.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+				l.Printf("timer %s\n", name)
+				l.Printf("  count:       %9d\n", t.Count())
+				l.Printf("  min:         %12.2f%s\n", float64(t.Min())/du, duSuffix)
+				l.Printf("  max:         %12.2f%s\n", float64(t.Max())/du, duSuffix)
+				l.Printf("  mean:        %12.2f%s\n", t.Mean()/du, duSuffix)
+				l.Printf("  stddev:      %12.2f%s\n", t.StdDev()/du, duSuffix)
+				l.Printf("  median:      %12.2f%s\n", ps[0]/du, duSuffix)
+				l.Printf("  75%%:         %12.2f%s\n", ps[1]/du, duSuffix)
+				l.Printf("  95%%:         %12.2f%s\n", ps[2]/du, duSuffix)
+				l.Printf("  99%%:         %12.2f%s\n", ps[3]/du, duSuffix)
+				l.Printf("  99.9%%:       %12.2f%s\n", ps[4]/du, duSuffix)
+				l.Printf("  1-min rate:  %12.2f\n", t.Rate1())
+				l.Printf("  5-min rate:  %12.2f\n", t.Rate5())
+				l.Printf("  15-min rate: %12.2f\n", t.Rate15())
+				l.Printf("  mean rate:   %12.2f\n", t.RateMean())
+			}
+		})
 	}
 }
 
@@ -81,10 +187,24 @@ func WatchSingle(
 	outKVP chan<- *api.KVPair,
 	done <-chan struct{},
 	outErrors chan<- error,
+	metricsRegistry metrics.Registry,
+	logger logging.Logger,
 ) {
 	defer close(outKVP)
 	var currentIndex uint64
 	timer := time.NewTimer(time.Duration(0))
+
+	if metricsRegistry == nil {
+		// in-memory metrics are better than nothing. We'll log these periodically
+		metricsRegistry = metrics.NewRegistry()
+	}
+	listLatencyHistogram, consulLatencyHistogram, outputPairsBlocking, _ := watchHistograms("single", metricsRegistry)
+	go metricsLog(metricsRegistry, 5*time.Minute, logger.WithField("WatchType", "Single"))
+
+	var (
+		safeGetStart    time.Time
+		outputPairStart time.Time
+	)
 
 	for {
 		select {
@@ -92,19 +212,24 @@ func WatchSingle(
 			return
 		case <-timer.C:
 		}
+		safeGetStart = time.Now()
 		timer.Reset(250 * time.Millisecond) // upper bound on request rate
 		kvp, queryMeta, err := SafeGet(clientKV, done, key, &api.QueryOptions{
 			WaitIndex: currentIndex,
 		})
+		listLatencyHistogram.Update(int64(time.Since(safeGetStart) / time.Millisecond))
+		consulLatencyHistogram.Update(int64(queryMeta.RequestTime))
 		switch err {
 		case CanceledError:
 			return
 		case nil:
+			outputPairStart = time.Now()
 			currentIndex = queryMeta.LastIndex
 			select {
 			case <-done:
 			case outKVP <- kvp:
 			}
+			outputPairsBlocking.Update(int64(time.Since(outputPairStart) / time.Millisecond))
 		default:
 			select {
 			case <-done:
@@ -239,6 +364,8 @@ func WatchDiff(
 	clientKV ConsulLister,
 	quitCh <-chan struct{},
 	outErrors chan<- error,
+	metricsRegistry metrics.Registry,
+	logger logging.Logger,
 ) <-chan *WatchedChanges {
 	outCh := make(chan *WatchedChanges)
 
@@ -251,6 +378,17 @@ func WatchDiff(
 		var currentIndex uint64
 		timer := time.NewTimer(time.Duration(0))
 
+		if metricsRegistry == nil {
+			// in-memory metrics are better than nothing. We'll log these periodically
+			metricsRegistry = metrics.NewRegistry()
+		}
+		listLatencyHistogram, consulLatencyHistogram, outputPairsBlocking, outputPairsHistogram := watchHistograms("diff", metricsRegistry)
+		go metricsLog(metricsRegistry, 5*time.Minute, logger.WithField("WatchType", "Diff"))
+
+		var (
+			safeListStart    time.Time
+			outputPairsStart time.Time
+		)
 		for {
 			select {
 			case <-quitCh:
@@ -259,9 +397,13 @@ func WatchDiff(
 			}
 			timer.Reset(250 * time.Millisecond) // upper bound on request rate
 
+			safeListStart = time.Now()
 			pairs, queryMeta, err := SafeList(clientKV, quitCh, prefix, &api.QueryOptions{
 				WaitIndex: currentIndex,
 			})
+			listLatencyHistogram.Update(int64(time.Since(safeListStart) / time.Millisecond))
+			consulLatencyHistogram.Update(int64(queryMeta.RequestTime))
+
 			if err == CanceledError {
 				select {
 				case <-quitCh:
@@ -315,10 +457,13 @@ func WatchDiff(
 				}
 			}
 
+			outputPairsStart = time.Now()
 			select {
 			case <-quitCh:
 			case outCh <- outgoingChanges:
 			}
+			outputPairsBlocking.Update(int64(time.Since(outputPairsStart) / time.Millisecond))
+			outputPairsHistogram.Update(int64(unsafe.Sizeof(pairs)))
 		}
 	}()
 

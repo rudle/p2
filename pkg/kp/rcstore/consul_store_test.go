@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/square/p2/pkg/kp/consulutil"
+	"github.com/square/p2/pkg/logging"
 	"github.com/square/p2/pkg/manifest"
 	"github.com/square/p2/pkg/rc/fields"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/rcrowley/go-metrics"
 )
 
 func TestPublishLatestRCs(t *testing.T) {
@@ -314,7 +316,7 @@ type LockInfoTestCase struct {
 
 func TestPublishLatestRCsWithLockInfoNoLocks(t *testing.T) {
 	client := consulutil.NewFakeClient()
-	rcstore := NewConsul(client, 1)
+	rcstore := NewConsul(client, 1, logging.DefaultLogger, metrics.NewRegistry())
 
 	inCh := make(chan []fields.RC)
 	defer close(inCh)
@@ -377,7 +379,7 @@ func TestPublishLatestRCsWithLockInfoNoLocks(t *testing.T) {
 func TestPublishLatestRCsWithLockInfoWithLocks(t *testing.T) {
 	client := consulutil.NewFakeClient()
 	fakeKV := client.KV()
-	rcstore := NewConsul(client, 1)
+	rcstore := NewConsul(client, 1, logging.DefaultLogger, metrics.NewRegistry())
 
 	inCh := make(chan []fields.RC)
 	defer close(inCh)
