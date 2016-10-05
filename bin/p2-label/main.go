@@ -15,13 +15,13 @@ import (
 
 var (
 	cmdApply               = kingpin.Command(CmdApply, "Apply label changes to all objects matching a selector")
-	applyLabelType         = cmdApply.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\"").Short('t').Required().String()
+	applyLabelType         = cmdApply.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\".\n Supported types can be found here: https://godoc.org/github.com/square/p2/pkg/labels#pkg-constants").Short('t').Required().String()
 	applySubjectSelector   = cmdApply.Flag("selector", "The selector on which to modify labels.").Short('s').Required().String()
 	applyAddititiveLabels  = cmdApply.Flag("add", "The label set to apply to the subject.").Short('a').String()
-	applyDestructiveLabels = cmdApply.Flag("delete", "The label set to remove to the subject. It is not an error to include extra labels here.").Short('d').String()
+	applyDestructiveLabels = cmdApply.Flag("delete", "The label set to remove from the subject. It is not an error to include extra labels here.").Short('d').String()
 
 	cmdShow       = kingpin.Command(CmdShow, "Show labels that apply to a particular entity (type, ID)")
-	showLabelType = cmdShow.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\"").Short('t').Required().String()
+	showLabelType = cmdShow.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\".\n Supported types can be found here: https://godoc.org/github.com/square/p2/pkg/labels#pkg-constants").Short('t').Required().String()
 	showID        = cmdShow.Flag("id", "The ID of the entity to show labels for.").Short('i').Required().String()
 )
 
@@ -40,6 +40,7 @@ func main() {
 		labelType, err := labels.AsType(*showLabelType)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing label type. Check the commandline. \n%v\n", err)
+			return
 		}
 
 		labelsForEntity, err := applicator.GetLabels(labelType, *showID)
@@ -53,26 +54,31 @@ func main() {
 		labelType, err := labels.AsType(*applyLabelType)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing label type. Check the commandline. \n%v\n", err)
+			return
 		}
 
 		subject, err := klabels.Parse(*applySubjectSelector)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing subject label. Check the syntax. \n%v\n", err)
+			return
 		}
 
 		additive, err := klabels.Parse(*applyAddititiveLabels)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing additive label set. Check the syntax. \n%v\n", err)
+			return
 		}
 		destructive, err := klabels.Parse(*applyDestructiveLabels)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing destructive label set. Check the syntax. \n%v\n", err)
+			return
 		}
 
 		cachedMatch := false
 		matches, err := applicator.GetMatches(subject, labelType, cachedMatch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while finding label matches. Syntax error? \n%v\n", err)
+			return
 		}
 
 		for _, match := range matches {
@@ -82,7 +88,6 @@ func main() {
 		}
 		return
 	}
-
 }
 
 func applyLabels(applicator labels.Applicator, entityID string, labelType labels.Type, additiveLabels, destructiveLabels klabels.Selector) error {
