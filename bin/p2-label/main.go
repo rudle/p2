@@ -15,10 +15,10 @@ import (
 
 var (
 	cmdApply               = kingpin.Command(CmdApply, "Apply label changes to all objects matching a selector")
-	applyLabelType         = cmdApply.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\".\n Supported types can be found here: https://godoc.org/github.com/square/p2/pkg/labels#pkg-constants").Short('t').Required().String()
+	applyLabelType         = cmdApply.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\".\n\tSupported types can be found here: https://godoc.org/github.com/square/p2/pkg/labels#pkg-constants").Short('t').Required().String()
 	applySubjectSelector   = cmdApply.Flag("selector", "The selector on which to modify labels.").Short('s').Required().String()
-	applyAddititiveLabels  = cmdApply.Flag("add", "The label set to apply to the subject.").Short('a').String()
-	applyDestructiveLabels = cmdApply.Flag("delete", "The label set to remove from the subject. It is not an error to include extra labels here.").Short('d').String()
+	applyAddititiveLabels  = cmdApply.Flag("add", "The label set to apply to the subject. Include multiple --add switches to include multiple labels\nExample: p2-label --selector $selector --add foo=bar --add bar=baz\nIt's safe to mix --add with --delete though the results of this command are not transactional.").Short('a').StringMap()
+	applyDestructiveLabels = cmdApply.Flag("delete", "The label set to remove from the subject. Include multiple --delete switches to include multiple labels\nExample: p2-label --selector $selector --delete foo=bar --delete bar=baz \nIt's safe to mix --add with --delete though the results of this command are not transactional.").Short('d').StringMap()
 
 	cmdShow       = kingpin.Command(CmdShow, "Show labels that apply to a particular entity (type, ID)")
 	showLabelType = cmdShow.Flag("labelType", "The type of label to adjust. Sometimes called the \"label tree\".\n Supported types can be found here: https://godoc.org/github.com/square/p2/pkg/labels#pkg-constants").Short('t').Required().String()
@@ -34,60 +34,67 @@ func main() {
 	cmd, opts := flags.ParseWithConsulOptions()
 	client := kp.NewConsulClient(opts)
 	applicator := labels.NewConsulApplicator(client, 3)
+	exitCode := 0
 
 	switch cmd {
 	case CmdShow:
 		labelType, err := labels.AsType(*showLabelType)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing label type. Check the commandline. \n%v\n", err)
-			return
+			break
 		}
 
 		labelsForEntity, err := applicator.GetLabels(labelType, *showID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Got error while querying labels. %v\n", err)
-			return
+			break
 		}
-		fmt.Printf("The current labels for %s are: %s\n", *showID, labelsForEntity.Labels.String())
+		fmt.Printf("%s: %s\n", *showID, labelsForEntity.Labels.String())
 		return
 	case CmdApply:
 		labelType, err := labels.AsType(*applyLabelType)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while parsing label type. Check the commandline. \n%v\n", err)
-			return
+			fmt.Fprintf(os.Stderr, "Unrecognized type %s. Check the commandline and documentation.\nhttps://godoc.org/github.com/square/p2/pkg/labels#pkg-constants\n", *applyLabelType)
+			break
 		}
 
 		subject, err := klabels.Parse(*applySubjectSelector)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while parsing subject label. Check the syntax. \n%v\n", err)
-			return
+			fmt.Fprintf(os.Stderr, "Error while parsing subject label. Check the syntax.\n%v\n", err)
+			break
 		}
 
-		additive, err := klabels.Parse(*applyAddititiveLabels)
+		additive := klabels.Set(*applyAddititiveLabels)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while parsing additive label set. Check the syntax. \n%v\n", err)
-			return
+			fmt.Fprintf(os.Stderr, "Error while parsing additive label set. Check the syntax.\n%v\n", err)
+			break
 		}
-		destructive, err := klabels.Parse(*applyDestructiveLabels)
+		destructive := klabels.Set(*applyDestructiveLabels)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while parsing destructive label set. Check the syntax. \n%v\n", err)
-			return
+			fmt.Fprintf(os.Stderr, "Error while parsing destructive label set. Check the syntax.\n%v\n", err)
+			break
 		}
 
 		cachedMatch := false
 		matches, err := applicator.GetMatches(subject, labelType, cachedMatch)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while finding label matches. Syntax error? \n%v\n", err)
-			return
+			fmt.Fprintf(os.Stderr, "Error while finding label matches. Check the syntax.\n%v\n", err)
+			break
 		}
 
 		for _, match := range matches {
 			entityID := match.ID
 
-			applyLabels(applicator, entityID, labelType, additive, destructive)
+			err := applyLabels(applicator, entityID, labelType, additive.AsSelector(), destructive.AsSelector())
+			if err != nil {
+				fmt.Printf("Encountered err during labeling, %v", err)
+				exitCode = 1
+			}
 		}
-		return
+		break
 	}
+
+	os.Exit(exitCode)
 }
 
 func applyLabels(applicator labels.Applicator, entityID string, labelType labels.Type, additiveLabels, destructiveLabels klabels.Selector) error {
