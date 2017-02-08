@@ -475,8 +475,11 @@ func (ds *daemonSet) clearPods() error {
 
 	ds.cancelReplication()
 
+	throttle := time.Tick(10 * time.Second)
+
 	for _, node := range toUnscheduleSorted {
-		err := ds.unschedule(node)
+		<-throttle
+		err = ds.unschedule(node)
 		if err != nil {
 			return util.Errorf("Error unscheduling node: %v", err)
 		}
