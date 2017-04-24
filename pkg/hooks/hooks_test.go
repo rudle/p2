@@ -144,7 +144,7 @@ func TestHookAuditLogging(t *testing.T) {
 	Assert(t).IsNil(err, "the error should have been nil")
 	hooks.runHooks(tempDir, AfterInstall, pod, testManifest(), logging.DefaultLogger)
 
-	Assert(t).IsTrue(len(buf) > 0, "Expected buf to capture audit logs.")
+	Assert(t).IsTrue(len(buf.Bytes()) > 0, "Expected buf to capture audit logs.")
 
 	contents, err := ioutil.ReadFile(path.Join(tempDir, "output"))
 	Assert(t).IsNil(err, "the error should have been nil")
