@@ -87,6 +87,7 @@ const (
 	updateSchemaVersionStatement   = `update hooks_schema_version set version = ?;`
 )
 
+// Close will terminate this AuditLogger. Re-establishing the connection is not supported: use the constructor.
 func (al *SQLiteAuditLogger) Close() error {
 	return al.sqlite.Close()
 }
