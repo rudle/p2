@@ -48,7 +48,7 @@ func TestSQLiteAuditLogger(t *testing.T) {
 	}
 	var count int
 	rows.Scan(&count)
-	if rows < 1 {
+	if count < 1 {
 		t.Fatal("Found no hook results in the DB")
 	}
 }
