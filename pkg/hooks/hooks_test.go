@@ -1,7 +1,6 @@
 package hooks
 
 import (
-	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
@@ -129,11 +128,12 @@ func TestHookAuditLogging(t *testing.T) {
 	defer os.RemoveAll(podDir)
 	Assert(t).IsNil(err, "the error should have been nil")
 
-	err := ioutil.WriteFile(path.Join(tempDir, "test1"), []byte("#!/bin/sh\necho $HOOKED_POD_ID > $(dirname $0)/output"), 0755)
+	err = ioutil.WriteFile(path.Join(tempDir, "test1"), []byte("#!/bin/sh\necho $HOOKED_POD_ID > $(dirname $0)/output"), 0755)
 	Assert(t).IsNil(err, "Caught error while writing test hook")
 
 	// So PodFromPodHome doesn't bail out, write a minimal current_manifest.yaml
 	ioutil.WriteFile(path.Join(podDir, "current_manifest.yaml"), []byte("id: my_hook"), 0755)
+	Assert(t).IsNil(err, "Caught error while writing test hook")
 
 	auditLoggerLogger := logging.TestLogger()
 	buf := &bytes.Buffer{}
@@ -144,7 +144,7 @@ func TestHookAuditLogging(t *testing.T) {
 	Assert(t).IsNil(err, "the error should have been nil")
 	hooks.runHooks(tempDir, AfterInstall, pod, testManifest(), logging.DefaultLogger)
 
-	fmt.Printf("\n\n%v\n\n", buf)
+	Assert(t).IsTrue(len(buf) > 0, "Expected buf to capture audit logs.")
 
 	contents, err := ioutil.ReadFile(path.Join(tempDir, "output"))
 	Assert(t).IsNil(err, "the error should have been nil")
