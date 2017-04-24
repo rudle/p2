@@ -73,7 +73,7 @@ var (
 	    pod_unique_key text,
 	    hook_name string,
 	    hook_stage string,
-	      success tinyint);`,
+	    exit_code int);`,
 
 		"create index hook_results_hook_name on hook_results(hook_name);",
 		"create index hook_results_pod_id on hook_results(pod_id);",
