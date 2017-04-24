@@ -1,0 +1,48 @@
+package hooks
+
+import (
+	"database/sql"
+	"io/ioutil"
+	"path/filepath"
+	"testing"
+
+	"github.com/square/p2/pkg/logging"
+)
+
+func initSQLiteAuditLogger(t *testing.T) (AuditLogger, *sql.DB) {
+	tempDir, err := ioutil.TempDir("", "hooks_audit_log")
+	if err != nil {
+		t.Fatalf("Could not set up for hook audit logger test.")
+	}
+
+	dbPath := filepath.Join(tempDir, "hooks.db")
+	logger := logging.TestLogger()
+	auditLogger, err := NewSQLiteAuditLogger(dbPath, &logger)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	return auditLogger, db
+}
+
+func TestSQLiteAuditLogger(t *testing.T) {
+	al, db := initSQLiteAuditLogger(t)
+	al.LogFailure(&HookExecContext{
+		Name: "sky",
+		env: HookExecutionEnvironment{
+			HookedPodIDEnvVar:        "pod",
+			HookedPodUniqueKeyEnvVar: "deadbeef",
+			HookEventEnvVar:          "before_install"},
+	}, nil)
+
+	rows, err := db.Query("SELECT * FROM hook_results")
+	if err != nil {
+		t.Fatalf("unable to query sqlite database: %v", err)
+	}
+	t.Logf("\n\nschema is: %v\n\n\n", rows)
+}
