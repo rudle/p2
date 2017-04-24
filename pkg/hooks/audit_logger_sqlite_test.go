@@ -42,11 +42,13 @@ func TestSQLiteAuditLogger(t *testing.T) {
 			HookEventEnvVar:          "before_install"},
 	}, nil)
 
-	rows, err := db.Query("SELECT * FROM hook_results")
+	rows, err := db.Query("SELECT COUNT(*) FROM hook_results")
 	if err != nil {
 		t.Fatalf("unable to query sqlite database: %v", err)
 	}
-	if len(rows) < 1 {
+	var count int
+	rows.Scan(&count)
+	if rows < 1 {
 		t.Fatal("Found no hook results in the DB")
 	}
 }
