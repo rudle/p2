@@ -101,6 +101,7 @@ func (h *HookExecContext) Run() {
 	cmd.Stderr = hookOut
 	cmd.Env = h.env.Env()
 	err := cmd.Run()
+	err.(os.ExitError)
 	if err != nil {
 		h.logger.WithErrorAndFields(err, logrus.Fields{
 			"path":   h.Path,
