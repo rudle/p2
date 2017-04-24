@@ -46,5 +46,7 @@ func TestSQLiteAuditLogger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to query sqlite database: %v", err)
 	}
-	t.Logf("\n\nschema is: %v\n\n\n", rows)
+	if len(rows) < 1 {
+		t.Fatal("Found no hook results in the DB")
+	}
 }
