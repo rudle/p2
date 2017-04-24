@@ -3,13 +3,14 @@ package hooks
 import (
 	"database/sql"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/square/p2/pkg/logging"
 )
 
-func initSQLiteAuditLogger(t *testing.T) (AuditLogger, *sql.DB) {
+func initSQLiteAuditLogger(t *testing.T) (AuditLogger, string, *sql.DB) {
 	tempDir, err := ioutil.TempDir("", "hooks_audit_log")
 	if err != nil {
 		t.Fatalf("Could not set up for hook audit logger test.")
@@ -31,7 +32,8 @@ func initSQLiteAuditLogger(t *testing.T) (AuditLogger, *sql.DB) {
 }
 
 func TestSQLiteAuditLogger(t *testing.T) {
-	al, db := initSQLiteAuditLogger(t)
+	al, tempDir, db := initSQLiteAuditLogger(t)
+	defer os.RemoveAll(tempDir)
 	al.LogFailure(&HookExecContext{
 		Name: "sky",
 		env: HookExecutionEnvironment{
