@@ -87,6 +87,10 @@ const (
 	updateSchemaVersionStatement   = `update hooks_schema_version set version = ?;`
 )
 
+func (al *SQLiteAuditLogger) Close() error {
+	return al.sqlite.Close()
+}
+
 func (al *SQLiteAuditLogger) ensureMigrated() error {
 	_, err := al.sqlite.Exec(sqliteCreateSchemaVersionTable)
 	if err != nil {
