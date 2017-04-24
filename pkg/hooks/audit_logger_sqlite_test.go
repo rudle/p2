@@ -47,7 +47,10 @@ func TestSQLiteAuditLogger(t *testing.T) {
 		t.Fatalf("unable to query sqlite database: %v", err)
 	}
 	var count int
-	rows.Scan(&count)
+	err = rows.Scan(&count)
+	if err != nil {
+		t.Fatalf("couldn't scan the DB result: %v", err)
+	}
 	if count < 1 {
 		t.Fatal("Found no hook results in the DB")
 	}
