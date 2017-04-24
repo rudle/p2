@@ -139,5 +139,5 @@ func (al *SQLiteAuditLogger) ensureMigrated() error {
 		return err
 	}
 
-	return err
+	return nil
 }
