@@ -28,7 +28,7 @@ func initSQLiteAuditLogger(t *testing.T) (AuditLogger, string, *sql.DB) {
 		t.Fatalf("error: %v", err)
 	}
 
-	return auditLogger, db
+	return auditLogger, tempDir, db
 }
 
 func TestSQLiteAuditLogger(t *testing.T) {
