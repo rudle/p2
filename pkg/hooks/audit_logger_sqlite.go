@@ -136,6 +136,7 @@ func (al *SQLiteAuditLogger) ensureMigrated() error {
 	_, err = tx.Exec(updateSchemaVersionStatement, int64(len(sqliteMigrations)))
 	if err != nil {
 		al.logger.WithError(err).Errorln("Could not update schema_version table")
+		return err
 	}
 
 	return err
