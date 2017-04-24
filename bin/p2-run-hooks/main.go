@@ -44,9 +44,6 @@ func main() {
 		}
 		auditLogger = al
 	}
-	if auditLogger == nil {
-		log.Fatalf("DEBUG: audit logger not available")
-	}
 
 	dir := hooks.NewContext(*hookDir, *podRoot, &logging.DefaultLogger, auditLogger)
 
