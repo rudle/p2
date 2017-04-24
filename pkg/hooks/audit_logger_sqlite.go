@@ -16,7 +16,7 @@ type SQLiteAuditLogger struct {
 func NewSQLiteAuditLogger(sqliteDBPath string, logger *logging.Logger) (*SQLiteAuditLogger, error) {
 	db, err := sql.Open("sqlite3", sqliteDBPath)
 	if err != nil {
-		return nil, err
+		return nil, util.Errorf("Unable to open sqlite at %s. %v", sqliteDBPath, err)
 	}
 	if db == nil {
 		return nil, util.Errorf("Unable to create a sqlite connection.")
@@ -26,7 +26,7 @@ func NewSQLiteAuditLogger(sqliteDBPath string, logger *logging.Logger) (*SQLiteA
 		logger: logger,
 	}
 	if err := al.ensureMigrated(); err != nil {
-		return nil, err
+		return nil, util.Errorf("Failed to apply migrations to sqlite DB: %v", err)
 	}
 	return al, nil
 }
@@ -87,7 +87,7 @@ const (
 	updateSchemaVersionStatement   = `update hooks_schema_version set version = ?;`
 )
 
-// Close will terminate this AuditLogger. Re-establishing the connection is not supported: use the constructor.
+// Close will terminate this AuditLogger. Re-establishing the connection is not supported, use the constructor.
 func (al *SQLiteAuditLogger) Close() error {
 	return al.sqlite.Close()
 }
