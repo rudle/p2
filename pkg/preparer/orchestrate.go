@@ -20,8 +20,6 @@ import (
 	"github.com/square/p2/pkg/util/size"
 )
 
-// The Pod ID of the preparer.
-// Used because the preparer special-cases itself in a few places.
 const (
 	minimumBackoffTime = 1 * time.Second
 )
