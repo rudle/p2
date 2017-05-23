@@ -56,6 +56,17 @@ type Store interface {
 	)
 }
 
+type Passport struct {
+	states []string
+}
+
+// TODO This is unsynchronized!
+func (p *Passport) stamp(state string) {
+	p.states = append(p.states, state)
+}
+
+var passport = &Passport{make([]string, 0)}
+
 // Identifies a pod which will be serviced by a goroutine. This struct is used
 // in maps that store goroutine-specific resources such as channels for
 // interaction
@@ -94,14 +105,18 @@ func (p *Preparer) WatchIntent(quitAndAck chan struct{}) {
 			p.Logger.WithError(err).
 				Errorln("there was an error reading the manifest")
 		case intentResults := <-podChan:
+			passport.stamp("intent watch")
 			realityResults, _, err := p.store.ListPods(consul.REALITY_TREE, p.node)
 			if err != nil {
-				p.Logger.WithError(err).Errorln("Could not check reality")
+				passport.stamp("reality read failed, retry")
+				p.Logger.WithError(err).Errorln("Could not check reality. Taking no action, will wait for next watch.")
+				continue
 			} else {
 				// if the preparer's own ID is missing from the intent set, we
 				// assume it was damaged and discard it
 				if !checkResultsForID(intentResults, constants.PreparerPodID) {
 					p.Logger.NoFields().Errorln("Intent results set did not contain p2-preparer pod ID, consul data may be corrupted")
+					continue
 				} else {
 					pairs := p.ZipResultSets(intentResults, realityResults)
 
@@ -142,7 +157,6 @@ func (p *Preparer) WatchIntent(quitAndAck chan struct{}) {
 			quitAndAck <- struct{}{} // acknowledge quit
 			return
 		}
-
 	}
 }
 
@@ -172,17 +186,26 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 	backoffTime := minimumBackoffTime
 	for {
 		select {
+		// Errors inside here should can use "break" instead of return to implement infinite retry
 		case <-quit:
 			return
 		case nextLaunch = <-podChan:
 			backoffTime = minimumBackoffTime
 			var sha string
+			var err error
 
-			// TODO: handle errors appropriately from SHA().
 			if nextLaunch.Intent != nil {
-				sha, _ = nextLaunch.Intent.SHA()
+				sha, err = nextLaunch.Intent.SHA()
+				if err != nil {
+					sha = "0"
+					manifestLogger.WithError(err).Warningln("Unable to compute manifest SHA.")
+				}
 			} else {
-				sha, _ = nextLaunch.Reality.SHA()
+				sha, err = nextLaunch.Reality.SHA()
+				if err != nil {
+					sha = "0"
+					manifestLogger.WithError(err).Warningln("Unable to compute manifest SHA.")
+				}
 			}
 			manifestLogger = p.Logger.SubLogger(logrus.Fields{
 				"pod":            nextLaunch.ID,
@@ -202,6 +225,7 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 					pod, err = p.podFactory.NewUUIDPod(nextLaunch.ID, nextLaunch.PodUniqueKey)
 					if err != nil {
 						manifestLogger.WithError(err).Errorln("Could not initialize pod")
+						passport.stamp("couldn't make pod")
 						break
 					}
 				}
@@ -221,7 +245,6 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 					}
 				}
 				pod.SetLogBridgeExec(effectiveLogBridgeExec)
-
 				pod.SetFinishExec(p.finishExec)
 
 				// podChan is being fed values gathered from a consul.Watch() in
@@ -255,6 +278,7 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 						nextLaunch.Reality = nil
 					} else if err != nil {
 						manifestLogger.WithError(err).Errorln("Error getting reality manifest")
+						passport.stamp("couldn't read reality")
 						break
 					} else {
 						nextLaunch.Reality = reality
