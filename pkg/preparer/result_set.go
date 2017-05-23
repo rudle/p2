@@ -33,6 +33,7 @@ func getUniqueKey(result consul.ManifestResult) uniqueKey {
 	}
 }
 
+// ZipResultSets returns the union of intent & reality without losing information about what is in each.
 // A ManifestResult may have either a non-nil Manifest OR a non-nil *PodUniqueKey. This function
 // assumes that there will not be duplicate PodIDs (i.e. Manifest.ID()) or PodUniqueKeys in
 // the same slice, and the behavior is undefined if this were to occur.

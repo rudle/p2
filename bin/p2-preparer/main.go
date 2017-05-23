@@ -69,7 +69,7 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatalln("Could not do initial hook installation")
 	}
-	go prep.WatchForPodManifestsForNode(quitMainUpdate)
+	go prep.WatchIntent(quitMainUpdate)
 
 	if prep.PodProcessReporter != nil {
 		quitPodProcessReporter := make(chan struct{})

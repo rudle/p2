@@ -75,7 +75,7 @@ func (p podWorkerID) String() string {
 	return fmt.Sprintf("%s-%s", p.podID.String(), p.podUniqueKey)
 }
 
-func (p *Preparer) WatchForPodManifestsForNode(quitAndAck chan struct{}) {
+func (p *Preparer) WatchIntent(quitAndAck chan struct{}) {
 	pods.Log = p.Logger
 
 	// This allows us to signal the goroutine watching consul to quit
@@ -123,7 +123,7 @@ func (p *Preparer) WatchForPodManifestsForNode(quitAndAck chan struct{}) {
 						select {
 						case podChanMap[workerID] <- pair:
 						case <-time.After(5 * time.Second):
-							p.Logger.WithField("pod", pair.ID).Warnln("Missed possible manifest update, will wait for next watch.")
+							p.Logger.WithField("pod", pair.ID).Warnln("Timeout while writing to goroutine responsible for %s on this host. Will try again in a while.", pair.ID.String())
 						}
 					}
 
@@ -225,7 +225,7 @@ func (p *Preparer) handlePods(podChan <-chan ManifestPair, quit <-chan struct{})
 				pod.SetFinishExec(p.finishExec)
 
 				// podChan is being fed values gathered from a consul.Watch() in
-				// WatchForPodManifestsForNode(). If the watch returns a new pair of
+				// WatchIntent(). If the watch returns a new pair of
 				// intent/reality values before the previous change has finished
 				// processing in resolvePair(), the reality value will be stale. This
 				// leads to a bug where the preparer will appear to update a package
