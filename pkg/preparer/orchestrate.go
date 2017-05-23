@@ -338,13 +338,23 @@ func (p *Preparer) authorize(manifest manifest.Manifest, logger logging.Logger) 
 func (p *Preparer) resolvePair(pair ManifestPair, pod Pod, logger logging.Logger) bool {
 	// do not remove the logger argument, it's not the same as p.Logger
 	var oldSHA, newSHA string
+	var err error
 	if pair.Reality != nil {
-		oldSHA, _ = pair.Reality.SHA()
+		oldSHA, err = pair.Reality.SHA()
+		if err != nil {
+			logger.WithError(err).Warningln("Unable to parse reality manifest to compute its SHA. Please retry.")
+			return false
+		}
 	}
 	if pair.Intent != nil {
-		newSHA, _ = pair.Intent.SHA()
+		newSHA, err = pair.Intent.SHA()
+		if err != nil {
+			logger.WithError(err).Warningln("Unable to parse reality manifest to compute its SHA. Please retry.")
+			return false
+		}
 	}
 
+	// YO, what does this mean
 	if oldSHA == "" && newSHA != "" {
 		logger.NoFields().Infoln("manifest is new, will update")
 		authorized := p.authorize(pair.Intent, logger)
