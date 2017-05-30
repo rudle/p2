@@ -44,7 +44,7 @@ end
 
 desc 'Install all built binaries'
 task :install do
-  e "go install -a -ldflags \"-X github.com/square/p2/pkg/version.VERSION=$(git describe --tags)\" ./..."
+  e "go install -a -ldflags \"-X github.com/square/p2/pkg/version.VERSION=1.0.2-852-g281600b8\" ./..."
 end
 
 task :errcheck do
