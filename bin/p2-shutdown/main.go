@@ -48,9 +48,6 @@ func main() {
 
 	podsToShutdown := make([]types.PodID, 0, len(*shutdownPods))
 	for _, pod := range *shutdownPods {
-		if listInclude(pod, *excludePods) {
-			continue
-		}
 		podsToShutdown = append(podsToShutdown, types.PodID(pod))
 	}
 
@@ -59,12 +56,12 @@ func main() {
 	var haltWG sync.WaitGroup
 	for _, realityEntry := range reality {
 		pod := podFactory.NewLegacyPod(realityEntry.Manifest.ID())
-		if *dryRun {
-			log.Printf("dry run, skipping this pod: %s", pod.Id)
+		if !shutdownPod(pod.Id, podsToShutdown, *excludePods) {
+			log.Printf("pod %s not in set of pods to shutdown, skipping", pod.Id)
 			continue
 		}
-		if !shutdownPod(pod.Id, podsToShutdown) {
-			log.Printf("pod %s not in set of pods to shutdown, skipping", pod.Id)
+		if *dryRun {
+			log.Printf("dry run, skipping this pod: %s", pod.Id)
 			continue
 		}
 
@@ -84,23 +81,22 @@ func main() {
 	haltWG.Wait()
 }
 
-func shutdownPod(podID types.PodID, podsToShutdown []types.PodID) bool {
-	if len(podsToShutdown) == 0 {
-		return true
+// returns true if the pod should be shutdown
+func shutdownPod(podID types.PodID, podsToShutdown []types.PodID, podsToExcludeFromShutdown []string) bool {
+	for _, excludedPod := range podsToExcludeFromShutdown {
+		if excludedPod == podID.String() {
+			return false
+		}
 	}
 	for _, pod := range podsToShutdown {
 		if pod == podID {
 			return true
 		}
 	}
-	return false
-}
 
-func listInclude(pod string, pods []string) bool {
-	for _, p := range pods {
-		if p == pod {
-			return true
-		}
+	if len(podsToShutdown) > 0 {
+		return false
 	}
-	return false
+
+	return true
 }
