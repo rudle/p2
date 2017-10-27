@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"log"
 	"net"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 	"github.com/square/p2/pkg/types"
 	"github.com/square/p2/pkg/uri"
 	"github.com/square/p2/pkg/util"
-	netutil "github.com/square/p2/pkg/util/net"
 	"github.com/square/p2/pkg/version"
 
 	"github.com/Sirupsen/logrus"
@@ -62,13 +62,14 @@ func main() {
 
 	var transport http.RoundTripper
 	if *caFile != "" {
-		tlsConfig, err := netutil.GetTLSConfig("", "", *caFile)
-		if err != nil {
-			log.Fatalln(err)
-		}
+		// tlsConfig, err := netutil.GetTLSConfig("", "", *caFile)
+		// if err != nil {
+		// 	log.Fatalln(err)
+		// }
 
 		transport = &http.Transport{
-			TLSClientConfig: tlsConfig,
+			// TLSClientConfig: tlsConfig,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			// same dialer as http.DefaultTransport
 			Dial: (&net.Dialer{
 				Timeout:   http.DefaultClient.Timeout,
