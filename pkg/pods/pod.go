@@ -449,6 +449,8 @@ func (pod *Pod) Install(manifest manifest.Manifest, verifier auth.ArtifactVerifi
 		}
 	}
 
+	pod.InstallPodCgroup(manifest)
+
 	// we may need to write config files to a unique directory per pod version, depending on restart semantics. Need
 	// to think about this more.
 	err = pod.setupConfig(manifest, launchables)
@@ -708,6 +710,20 @@ func (pod *Pod) SetLogBridgeExec(logExec []string) {
 	pod.LogExec = append([]string{pod.P2Exec}, p2ExecArgs.CommandLine()...)
 }
 
+// TODO the error handling here is insufficient
+func (pod *Pod) InstallPodCgroup(man manifest.Manifest) {
+	if *NestedCgroups {
+		// if pod.CurrentManifest().GetResourceLimits() == Resourc
+		if (man.GetResourceLimits() == manifest.ResourceLimitsStanza{}) || (man.GetResourceLimits().Cgroup == cgroups.Config{}) {
+			pod.logger.Warn("Resource Limits not specified, skipping pod cgroup")
+		} else {
+			if err := pod.installCgroup(); err != nil {
+				pod.logger.WithError(err).Errorf("Could not create pod cgroup")
+			}
+		}
+	}
+}
+
 func (pod *Pod) getLaunchable(launchableID launch.LaunchableID, launchableStanza launch.LaunchableStanza, runAsUser string) (launch.Launchable, error) {
 	launchableRootDir := filepath.Join(pod.home, launchableID.String())
 	serviceId := strings.Join(
@@ -733,25 +749,6 @@ func (pod *Pod) getLaunchable(launchableID launch.LaunchableID, launchableStanza
 		pod.logger.WithError(err).Warnf("Could not parse version from launchable %s.", launchableID)
 	}
 
-	podCgroup := ""
-	if *NestedCgroups {
-		// if pod.CurrentManifest().GetResourceLimits() == Resourc
-		man, err := pod.CurrentManifest()
-		if err != nil {
-			pod.logger.WithError(err).Errorf("Could not create pod cgroup")
-		}
-		if (man.GetResourceLimits() == manifest.ResourceLimitsStanza{}) || (man.GetResourceLimits().Cgroup == cgroups.Config{}) {
-			pod.logger.Warn("Resource Limits not specified, skipping pod cgroup")
-		} else {
-			err = pod.installCgroup()
-			if err != nil {
-				pod.logger.WithError(err).Errorf("Could not create pod cgroup")
-			}
-
-			podCgroup = pod.UniqueName()
-		}
-	}
-
 	if launchableStanza.LaunchableType == "hoist" {
 		entryPointPaths := launchableStanza.EntryPoints
 		implicitEntryPoints := false
@@ -766,8 +763,10 @@ func (pod *Pod) getLaunchable(launchableID launch.LaunchableID, launchableStanza
 		}
 
 		cgroupName := serviceId
+		podCgroup := ""
 		if *NestedCgroups {
 			cgroupName = launchableID.String()
+			podCgroup = pod.UniqueName()
 		}
 
 		ret := &hoist.Launchable{
