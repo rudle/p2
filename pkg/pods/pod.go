@@ -73,9 +73,24 @@ type Pod struct {
 	LogExec        runit.Exec
 	FinishExec     runit.Exec
 	Fetcher        uri.Fetcher
+	ManifestFinder ManifestFinder
 
 	// Pod will not start if file is not present
 	RequireFile string
+}
+
+type ManifestFinder interface {
+	Find(pod Pod) (manifest.Manifest, error)
+}
+
+type diskManifestFinder struct{}
+
+func (dmf *diskManifestFinder) Find(pod Pod) (manifest.Manifest, error) {
+	currentManPath := pod.currentPodManifestPath()
+	if _, err := os.Stat(currentManPath); os.IsNotExist(err) {
+		return nil, NoCurrentManifest
+	}
+	return manifest.FromPath(currentManPath)
 }
 
 var NoCurrentManifest error = fmt.Errorf("No current manifest for this pod")
@@ -103,11 +118,11 @@ func (pod *Pod) UniqueKey() types.PodUniqueKey {
 }
 
 func (pod *Pod) CurrentManifest() (manifest.Manifest, error) {
-	currentManPath := pod.currentPodManifestPath()
-	if _, err := os.Stat(currentManPath); os.IsNotExist(err) {
-		return nil, NoCurrentManifest
+	if pod.ManifestFinder != nil {
+		return pod.ManifestFinder.Find(*pod)
 	}
-	return manifest.FromPath(currentManPath)
+	dmf := &diskManifestFinder{}
+	return dmf.Find(*pod)
 }
 
 func (pod *Pod) Halt(manifest manifest.Manifest) (bool, error) {
